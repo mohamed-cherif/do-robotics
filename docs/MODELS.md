@@ -12,7 +12,7 @@ follower is classical image processing.
 |---|---|
 | File | `assets/ml/1.tflite` (4.56 MB), labels `assets/ml/labelmap.txt` |
 | Identity | **EfficientDet-Lite0 detection, TF Hub / Kaggle `tensorflow/efficientdet/tfLite/lite0-detection-default/1`** — byte-identical (SHA-256 `33a3b622c7cac0762f96089353cd61495f3e993968d133af7871bfc2d5396704`). Earlier docs called it "SSD-MobileNet v1, 300×300"; that was wrong. |
-| License | Apache-2.0 (TensorFlow models on TF Hub/Kaggle). Trained on COCO 2017 (annotations CC BY 4.0). Owner to confirm and record in `NOTICE`. |
+| License | Apache-2.0 (TensorFlow models on TF Hub/Kaggle). Trained on COCO 2017 (annotations CC BY 4.0). Credited in `NOTICE`. |
 | Input | `[1, 320, 320, 3]` uint8 RGB, 0–255 (quantization scale 1/128, zero point 127 — the model handles normalization) |
 | Outputs | TFLite_Detection_PostProcess (NMS inside the model): boxes `[1,25,4]` (ymin, xmin, ymax, xmax, normalized), class ids `[1,25]`, scores `[1,25]`, count `[1]`. Output 1 = classes, output 2 = scores, even though they are *named* `…:2` and `…:1`. |
 | Classes | 80 COCO objects (ids 0–89 with gaps; `labelmap.txt` line = id + 1). No "face" class. |

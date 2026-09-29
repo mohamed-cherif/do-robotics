@@ -26,8 +26,11 @@ please keep them in mind:
 - **The ESP32 hotspot uses a shared default password** (`12345678`, see
   `arduino/receiver/receiver.ino`). Change `WIFI_PASS` before flashing if
   your robot will be used around other people.
-- **Any device on the same WiFi network can connect to TCP port 4210**
-  while the robot is idle.
+- **Any device on the same WiFi network (or on the robot's hotspot) can
+  connect to TCP port 4210 and take over the robot**, even while a phone is
+  driving it: the newest connection wins, so a phone whose WiFi dropped can
+  reconnect at once. The robot stops all outputs on every hand-over. Robot
+  settings (WiFi, name) can only be changed over Bluetooth or USB.
 - WiFi credentials sent with "Set up robot WiFi" are stored unencrypted in
   the ESP32's flash (NVS).
 - Speech recognition uses the phone's system recognizer, which may send

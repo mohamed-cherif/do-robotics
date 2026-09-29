@@ -1,0 +1,19 @@
+DO Robotics
+Copyright 2026 The DO Robotics Authors
+
+This product is licensed under the Apache License, Version 2.0 (see the
+LICENSE file).
+
+It includes third-party material under its own license:
+
+- EfficientDet-Lite0 object detection model (assets/ml/1.tflite),
+  Copyright The TensorFlow Authors, licensed under the Apache License,
+  Version 2.0. Obtained from TF Hub / Kaggle Models
+  (tensorflow/efficientdet/tfLite/lite0-detection-default/1).
+
+- COCO dataset class names (assets/ml/labelmap.txt) and the COCO val2017
+  annotation subset in tools/model_eval/coco_val2017_subset.json,
+  from the COCO dataset (https://cocodataset.org), (c) COCO Consortium,
+  annotations licensed under CC BY 4.0
+  (https://creativecommons.org/licenses/by/4.0/). The images are not
+  included; the evaluation script downloads them.

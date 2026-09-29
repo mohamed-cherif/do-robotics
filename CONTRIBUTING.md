@@ -72,3 +72,11 @@ Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first. In short:
 
 Imperative subject line (≤ 72 chars), then a body that explains the problem
 and the fix. Reference issues with `Fixes #123`.
+
+## License
+
+The project is licensed under the [Apache License 2.0](LICENSE). By
+submitting a contribution you agree that it is licensed under the same
+terms (section 5 of the license). Don't add code, models or media you
+don't have the right to share; third-party material needs its license
+noted in [NOTICE](NOTICE).

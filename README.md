@@ -310,8 +310,12 @@ lines over USB serial at 115200.
 
 ## License
 
-TODO(owner): not chosen yet — see "Needs decision" in
-[docs/AUDIT_2026-09.md](docs/AUDIT_2026-09.md). Third-party components keep
-their licenses: the EfficientDet-Lite0 model (Apache-2.0, TensorFlow), COCO
-labels (CC BY 4.0), and the Flutter packages listed in `pubspec.lock`
-(BSD-3-Clause, MIT, Apache-2.0; two Linux-only MPL-2.0 packages).
+[Apache License 2.0](LICENSE): you may use, change and share the code,
+also commercially, as long as you keep the license and [NOTICE](NOTICE)
+and mark the files you changed. The documentation in `docs/` may also be
+used under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+Third-party components keep their licenses: the EfficientDet-Lite0 model
+(Apache-2.0, TensorFlow), COCO labels (CC BY 4.0), and the Flutter
+packages listed in `pubspec.lock` (BSD-3-Clause, MIT, Apache-2.0; two
+Linux-only MPL-2.0 packages).
