@@ -36,20 +36,25 @@ below with a USB cable.
 
 | Board | Sketch | Arduino IDE setup | Links |
 |---|---|---|---|
-| **ESP32 DevKit** (recommended) | `arduino/receiver/receiver.ino` | Boards Manager: **esp32 by Espressif, 3.x** (2.x does not compile). Library Manager: **ESP32Servo ≥ 3.0**. Board "ESP32 Dev Module", Tools › Partition Scheme **"Huge APP (3MB No OTA)"**. | Bluetooth, WiFi, USB |
+| **ESP32 DevKit** (recommended) | `arduino/receiver/receiver.ino` | Boards Manager: **esp32 by Espressif, 3.x** (2.x does not compile). Library Manager: **ESP32Servo ≥ 3.0**. Board "ESP32 Dev Module", Tools › Partition Scheme **"Huge APP (3MB No OTA)"** (the sketch is about 1.7 MB; the default scheme has room for about 1.3 MB). | Bluetooth, WiFi, USB |
 | Arduino Uno | `arduino/receiver_uno/receiver_uno.ino` | Arduino AVR Boards, built-in Servo library | USB only |
 | Arduino Mega | `arduino/receiver_mega/receiver_mega.ino` | same as Uno | USB only |
+
+After flashing, the Uno/Mega built-in LED blinks 3 times. Using
+`arduino-cli` instead of the IDE? Also run `arduino-cli lib install Servo`
+(the IDE bundles it; the CLI doesn't).
 
 **2. Install the app** on the phone:
 
 ```
-git clone <this repo> && cd do_robotics
+git clone <this repo> && cd do-robotics
 flutter pub get
 flutter run --release        # phone connected over USB
 ```
 
 The camera, Bluetooth, USB and speech recognition need a real phone; the
-emulator can only show the UI.
+emulator can only show the UI. To make an APK file you can keep and copy
+to other phones instead, see [Build an installable app](#build-an-installable-app-apk).
 
 **3. Connect.** On the **Home** tab tap the header ("SYSTEM OFFLINE") and
 choose **Bluetooth** (ESP32 — it advertises as *ESP32 Robot XXXX*, where
@@ -78,6 +83,76 @@ connect over Bluetooth or USB first, then header menu › **Set up robot
 WiFi** (for safety the robot only accepts WiFi settings over Bluetooth or
 USB, never over WiFi itself). Afterwards use header › **WiFi** ›
 **Find robot** (mDNS `robot.local`), or type the IP address.
+
+## Build an installable app (APK)
+
+`flutter run --release` installs straight from your computer. To get an
+APK file you can keep, copy to phones or share:
+
+**1. One-time setup.** Install [Flutter 3.38](https://docs.flutter.dev/get-started/install)
+and the Android SDK (installing [Android Studio](https://developer.android.com/studio)
+is the easiest way; all of it is free). Run `flutter doctor` until the
+*Android toolchain* line has a ✓ (`flutter doctor --android-licenses`
+accepts the SDK licenses).
+
+**2. Build.** In the project folder:
+
+```
+flutter pub get
+flutter build apk --release --split-per-abi
+```
+
+The first build is slow (almost 30 minutes on the Windows laptop used to
+write this, most of it compiling Android code once). It writes three APKs
+to `build/app/outputs/flutter-apk/`:
+
+| File | For |
+|---|---|
+| `app-arm64-v8a-release.apk` (≈ 29 MB) | almost every phone from the last ~8 years: **use this one** |
+| `app-armeabi-v7a-release.apk` | old 32-bit phones |
+| `app-x86_64-release.apk` | emulators, some Chromebooks |
+
+Not sure which phone type you have? `adb shell getprop ro.product.cpu.abi`
+prints it. `flutter build apk --release` (without `--split-per-abi`) makes
+a single, bigger `app-release.apk` that runs on all of them.
+
+**3. Install**, either way:
+
+- **With a USB cable:** on the phone enable *Developer options › USB
+  debugging*, plug it in, then
+  `adb install -r build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`
+  (`adb` is in the Android SDK's `platform-tools` folder).
+- **Without a cable:** copy the APK to the phone (USB file transfer, Google
+  Drive, e-mail …), tap it in the *Files* app, and allow **Install unknown
+  apps** for that app when Android asks. Play Protect may warn about an app
+  that isn't from the Play Store; the warning lets you install anyway.
+
+**4. First start.** Open **DO Robotics** and allow camera, microphone and
+Nearby devices (Bluetooth; called Location on Android 11 and older) when
+asked.
+
+**Signing.** With no extra setup the release APK is signed with your
+computer's *debug* key. That is fine for your own phones, but Android only
+installs an update over an existing copy if both were signed with the same
+key (otherwise uninstall first). To share builds for the long term, create
+a key once:
+
+```
+keytool -genkey -v -keystore ~/do-robotics-upload.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+```
+
+and create `android/key.properties` (git-ignored; never commit it or the
+`.jks`):
+
+```
+storeFile=/full/path/to/do-robotics-upload.jks
+storePassword=...
+keyAlias=upload
+keyPassword=...
+```
+
+Keep a backup of the key: without it you can't ship updates to phones that
+already have the app.
 
 ## Programming
 
@@ -143,13 +218,19 @@ while True:
 
 ## Sensors, the phone mount, and the camera
 
-- Mount the phone **upright (portrait), back camera facing forward** — the
+- Mount the phone **in portrait, back camera facing forward** — the
   vision, compass (direction the camera faces) and turn-rate readings are
   designed for that. A phone lying flat also works for compass and tilt.
+  The app stays in portrait.
+- **Upside down is fine** (charging port up, e.g. when a holder covers the
+  bottom). With *Phone mounting: Automatic* (the default) the app notices
+  and flips the camera image, so "target on the left" still means the
+  robot's left and steering is unchanged. Choose *Upright* or *Upside
+  down* in the camera settings to fix it instead.
 - Object detection uses **EfficientDet-Lite0** (80 everyday COCO objects,
   e.g. person, cup, bottle, sports ball — no faces). Accuracy, speed and
   limitations: [docs/MODELS.md](docs/MODELS.md).
-- Camera settings (objects to look for, confidence, upside-down mount,
+- Camera settings (objects to look for, confidence, phone mounting,
   **Performance**: Battery saver / Balanced / Fast) are under Home ›
   Configure Sensors › Camera › ⚙.
 - Speech recognition uses the phone's system recognizer, which may send
@@ -181,15 +262,24 @@ Text frames (ESP32 only; Uno/Mega answer `ERR\tunsupported`): phone → board
 phone `HELLO`, `WIFI\t…`, `STATUS\t…`, `OK`/`ERR`, `WATCHDOG\tlink lost`.
 
 **Failsafe:** the firmware stops every output it has driven if no packet
-arrives for 2 s, on BLE disconnect and when the WiFi client drops.
+arrives for 2 s, on BLE disconnect, when the WiFi client drops and when a
+new WiFi client takes over.
+
+The board answers a command it can't carry out with an `ERR` text frame
+(at most one per second), which the app shows in the program log: a pin
+that can't be used, PWM on a pin without PWM, more than 8 servos on
+Uno/Mega.
 
 ### Pins to avoid
 
-- **ESP32:** 6–11 (flash — using them crashes the board), 1/3 (USB serial),
-  34–39 are input-only; strapping pins 0, 2, 5, 12, 15 must not be pulled
-  the wrong way at boot.
-- **Uno/Mega:** 0/1 (USB serial), 13 (activity LED). On the Uno, attaching
-  any servo disables PWM on pins 9 and 10.
+- **ESP32** (the firmware refuses these): 6–11 (flash — using them crashes
+  the board), 0 and 1/3 (boot button, USB serial); 34, 35, 36, 39 are
+  input-only. Strapping pins 2, 5, 12, 15 work but must not be pulled the
+  wrong way at boot.
+- **Uno/Mega:** 0/1 (USB serial). Once a servo has been used, PWM stops
+  working on pins 9 and 10 (Uno) or 44–46 (Mega) until the board is reset —
+  the Servo library takes over their timer. Pin 13 (built-in LED) is
+  fine: the activity blink stays off once your program uses it.
 
 ## Documentation
 
@@ -206,12 +296,14 @@ arrives for 2 s, on BLE disconnect and when the WiFi client drops.
 ## Developing
 
 ```
-flutter analyze        # must report "No issues found"
-flutter test           # 130+ unit/widget tests, no phone needed
-flutter run            # on a physical phone
+flutter analyze                 # must report "No issues found"
+flutter test                    # 170+ unit/widget tests, no phone needed
+flutter run                     # on a physical phone
+bash arduino/test/run_tests.sh  # firmware logic on the computer, no board needed (g++ or clang++)
 ```
 
-CI (`.github/workflows/ci.yml`) runs analyze, tests and a release APK build.
+CI (`.github/workflows/ci.yml`) runs analyze, tests, a release APK build,
+the firmware host tests, and compiles the three sketches.
 Debugging on a robot: **Blocks › ⋮ › View Logs** shows every command the
 interpreter sends; `#define DEBUG_ECHO` in the ESP32 sketch prints `EXEC:`
 lines over USB serial at 115200.
