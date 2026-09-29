@@ -210,9 +210,12 @@ class ObjectDetectorService {
     int inputW = 300;
     int numDetections = 25;
     TensorType inputType = TensorType.uint8;
-    // Output tensor indices for the SSD post-process op. Detected from tensor
-    // shapes/names at load time; these are the TF-Hub defaults.
+    // Output tensor indices of the TFLite_Detection_PostProcess op, whose
+    // output order is boxes, classes, scores, count. Boxes/count are found by
+    // shape at load time; classes vs scores are confirmed from the values of
+    // the first frames (see resolveClassScoreRoles).
     int boxesIdx = 0, classesIdx = 1, scoresIdx = 2, countIdx = 3;
+    bool rolesConfirmed = false;
 
     await for (final message in port) {
       if (message is _InitCommand) {
@@ -234,8 +237,9 @@ class ObjectDetectorService {
           inputW = inputShape[2];
           inputType = inputTensor.type;
 
-          // Resolve output tensor roles by shape (boxes = [1,N,4], count = [1]);
-          // classes vs scores by name suffix, falling back to the default order.
+          // Resolve output tensor roles by shape (boxes = [1,N,4], count = [1]).
+          // Tensor *names* are not reliable: the bundled TF2 model names its
+          // class tensor "...:2" and its score tensor "...:1".
           final outputs = interpreter.getOutputTensors();
           final remaining = <int>[];
           for (var i = 0; i < outputs.length; i++) {
@@ -250,15 +254,11 @@ class ObjectDetectorService {
             }
           }
           if (remaining.length == 2) {
-            final a = outputs[remaining[0]].name, b = outputs[remaining[1]].name;
-            if (a.endsWith(':2') || b.endsWith(':1')) {
-              scoresIdx = remaining[0];
-              classesIdx = remaining[1];
-            } else {
-              classesIdx = remaining[0];
-              scoresIdx = remaining[1];
-            }
+            // Post-process op order until the values say otherwise.
+            classesIdx = remaining[0];
+            scoresIdx = remaining[1];
           }
+          rolesConfirmed = false;
 
           labels = message.labels.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
           mainSendPort.send(_ModelStatus(null,
@@ -317,8 +317,23 @@ class ObjectDetectorService {
 
           interpreter.runForMultipleInputs([input], outputs);
 
-          final scores = scoresOut[0];
-          final classes = classesOut[0];
+          var scores = scoresOut[0];
+          var classes = classesOut[0];
+          if (!rolesConfirmed) {
+            final classesFirst = resolveClassScoreRoles(classes, scores);
+            if (classesFirst != null) {
+              rolesConfirmed = true;
+              if (!classesFirst) {
+                final t = classesIdx;
+                classesIdx = scoresIdx;
+                scoresIdx = t;
+                final tmp = classes;
+                classes = scores;
+                scores = tmp;
+              }
+              mainSendPort.send('Output roles confirmed: classes=$classesIdx scores=$scoresIdx');
+            }
+          }
           final locations = boxesOut[0];
           final int valid = countOut[0].isFinite && countOut[0] > 0
               ? countOut[0].toInt().clamp(0, numDetections)
@@ -378,6 +393,18 @@ class ObjectDetectorService {
         }
       }
     }
+  }
+
+  /// Decides which of the two [1,N] detector outputs holds class ids: class
+  /// ids are whole numbers, scores are fractions in [0, 1]. Returns true if
+  /// [a] is the class tensor, false if [b] is, null when it can't tell yet
+  /// (e.g. every value is 0). Public for tests.
+  static bool? resolveClassScoreRoles(List<double> a, List<double> b) {
+    bool integral(List<double> v) =>
+        v.every((x) => x.isFinite && x >= 0 && (x - x.roundToDouble()).abs() < 1e-6);
+    final aInt = integral(a), bInt = integral(b);
+    if (aInt == bInt) return null;
+    return aInt;
   }
 
   // ── Fast single-pass tensor fill ─────────────────────────────────────────────
