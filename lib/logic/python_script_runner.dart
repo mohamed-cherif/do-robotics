@@ -32,6 +32,8 @@ class PythonScriptRunner {
   CancelToken? _cancel;
   RobotApi? _api;
   Future<void>? _teardown;
+  bool _starting = false;
+  bool _startCancelled = false;
   int _lastEmittedLine = -1;
   DateTime _lastLineEmit = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -54,12 +56,21 @@ class PythonScriptRunner {
   }
 
   Future<void> run(String source) async {
-    if (_state == ExecutionState.running) return;
+    if (_state == ExecutionState.running || _starting) return;
     if (BlockScriptRunner().state == ExecutionState.running) {
       _logger.log("⚠️ A block program is already running");
       return;
     }
-    await _teardown;
+    // Wait for the previous run's teardown. _starting makes a second RUN
+    // during this wait a no-op; stop() during it cancels this start.
+    _starting = true;
+    _startCancelled = false;
+    try {
+      await _teardown;
+    } finally {
+      _starting = false;
+    }
+    if (_startCancelled) return;
 
     _logger.clear();
     _logger.log("🐍 Python program started");
@@ -118,8 +129,10 @@ class PythonScriptRunner {
     _lineController.add(line);
   }
 
-  /// Stops a running program. Safe to call when idle.
+  /// Stops a running program, or cancels one that is still starting. Safe to
+  /// call when idle.
   void stop() {
+    if (_starting) _startCancelled = true;
     if (_state != ExecutionState.running) return;
     _logger.log("⏹️ Program stopped");
     final token = _cancel;

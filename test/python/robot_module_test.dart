@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:do_robotics/logic/actuator_driver.dart';
+import 'package:do_robotics/logic/block_script_runner.dart' show ExecutionState;
+import 'package:do_robotics/logic/python_script_runner.dart';
 import 'package:do_robotics/logic/robot_api.dart';
 import 'package:do_robotics/models/actuator_config.dart';
 import 'package:do_robotics/python/interpreter.dart';
@@ -188,6 +190,35 @@ robot.log("done", 1)
   test('robot.stop() ends the program without error', () async {
     final (out, _) = await runRobot('import robot\nprint("a")\nrobot.stop()\nprint("b")\n');
     expect(out, ['a']);
+  });
+
+  test('PythonScriptRunner: a second RUN or a STOP during start-up never starts a stray run', () async {
+    final runner = PythonScriptRunner();
+    final apis = <FakeRobotApi>[];
+    runner.apiFactory = () {
+      final api = FakeRobotApi();
+      apis.add(api);
+      return api;
+    };
+    // A run that is stopped leaves a teardown the next start must wait for.
+    final first = runner.run('import robot\nrobot.wait(5)\n');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    runner.stop();
+    await first;
+
+    // Double-tap RUN: exactly one new run.
+    final a = runner.run('import robot\nrobot.wait(0.2)\n');
+    final b = runner.run('import robot\nrobot.wait(0.2)\n');
+    await Future.wait([a, b]);
+    expect(apis, hasLength(2));
+
+    // STOP right after RUN, while it waits for the teardown: nothing runs.
+    final c = runner.run('import robot\nrobot.say("should not run")\n');
+    runner.stop();
+    await c;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(runner.state, ExecutionState.idle);
+    expect(apis.expand((a) => a.calls), isNot(contains('say:should not run')));
   });
 
   test('robot.wait is cancellable', () async {

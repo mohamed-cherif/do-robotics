@@ -119,6 +119,7 @@ class BlockScriptRunner {
   Future<void>? _teardown;
   _Run? _run;
   bool _starting = false;
+  bool _startCancelled = false;
 
   void loadScript(List<BlockInstance> script) {
     _script = List.from(script);
@@ -136,11 +137,14 @@ class BlockScriptRunner {
     // never re-open the camera while it is still being disposed. _starting
     // makes a double-tap during this wait a no-op instead of a second run.
     _starting = true;
+    _startCancelled = false;
     try {
       await _teardown;
     } finally {
       _starting = false;
     }
+    // stop() while we were waiting (e.g. the app went to the background).
+    if (_startCancelled) return;
 
     final run = _Run();
     _run = run;
@@ -155,8 +159,10 @@ class BlockScriptRunner {
     await _executeScript(run);
   }
 
-  /// Stops the running program. Safe to call more than once.
+  /// Stops the running program, or cancels one that is still starting.
+  /// Safe to call more than once.
   void stop() {
+    if (_starting) _startCancelled = true;
     if (_state == ExecutionState.idle) return;
     _run?.cancel();
     _logger.log("⏹️ Program stopped");

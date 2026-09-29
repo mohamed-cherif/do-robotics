@@ -83,6 +83,23 @@ void main() {
     expect(runner.state, ExecutionState.idle);
   });
 
+  test('STOP while a run is still starting cancels it', () async {
+    // A first run, stopped: its teardown keeps the next start waiting.
+    runner.loadScript([block('logic_wait', inputs: {'seconds': 5})]);
+    unawaited(runner.play());
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    runner.stop();
+    // Second run starts waiting for that teardown; stop it right away (as
+    // the lifecycle guard does when the app goes to the background).
+    runner.loadScript([print(9)]);
+    final second = runner.play();
+    runner.stop();
+    await second;
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(runner.state, ExecutionState.idle);
+    expect(printed(), isEmpty);
+  });
+
   test('rapid RUN/STOP cycles never throw and always end idle', () async {
     runner.loadScript([
       block('logic_forever', nested: {'do': block('logic_wait', inputs: {'seconds': 0.05})}),
