@@ -127,7 +127,8 @@ const int _hint = 0xFF64748B; // slate — "next step goes here" placeholders
 const String _connectHowTo =
     'On the Home tab, tap the header that says SYSTEM OFFLINE and pick '
     'USB Serial (OTG) for an Uno/Mega (Android only) or Bluetooth for an '
-    'ESP32. It turns to SYSTEM ONLINE when connected.';
+    'ESP32, then tap your robot in the list. It turns to SYSTEM ONLINE '
+    'when connected.';
 
 const String _carSetup =
     'Set up, test and connect the robot car exactly as in "Beat Reactive '

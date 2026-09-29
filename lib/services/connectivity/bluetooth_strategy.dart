@@ -4,6 +4,16 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'robot_connection.dart';
 import 'robot_protocol.dart';
 
+/// A robot seen in a Bluetooth scan.
+class FoundRobot {
+  /// Platform device id (the MAC address on Android); what connect() takes.
+  final String id;
+  final String name;
+  /// Signal strength in dBm (about -40 right next to the phone, -90 far away).
+  final int rssi;
+  const FoundRobot({required this.id, required this.name, required this.rssi});
+}
+
 class BluetoothStrategy implements RobotConnection {
   BluetoothDevice? _connectedDevice;
   BluetoothDevice? _lastDevice;
@@ -18,6 +28,10 @@ class BluetoothStrategy implements RobotConnection {
   bool _disposed = false;
   bool _reconnectPending = false;
   int _reconnectAttempts = 0;
+  /// Bumped by disconnect(): attempts started before it must not complete,
+  /// even if connect() was called again meanwhile.
+  int _attempt = 0;
+  Future<bool>? _pendingConnect;
 
   final StreamController<RobotConnectionState> _stateController =
       StreamController<RobotConnectionState>.broadcast();
@@ -33,6 +47,90 @@ class BluetoothStrategy implements RobotConnection {
   static final Guid _nusTxUuid = Guid("6E400003-B5A3-F393-E0A9-E50E24DCCA9E");
   static const Duration _scanDuration = Duration(seconds: 10);
   static const int _maxReconnectAttempts = 5;
+
+  /// FlutterBluePlus has one scan for the whole app, and a new scan silently
+  /// replaces the running one. Every scan takes a number from here; code
+  /// only stops the scan if it is still the one it started.
+  static int _scanGeneration = 0;
+  int _myScan = -1;
+
+  /// True for advertised names that look like one of our robots.
+  static bool isRobotName(String name) => _targetNames.any(name.contains);
+
+  static String _nameOf(ScanResult r) => r.device.platformName.isNotEmpty
+      ? r.device.platformName
+      : r.advertisementData.advName;
+
+  /// Scans for [duration] and reports the robots seen so far (each event is
+  /// the full list). The stream closes when the scan ends; cancelling the
+  /// subscription stops the scan. Only lists — never connects. Don't run it
+  /// while a connect() attempt is scanning: they would share the one scan.
+  static Stream<List<FoundRobot>> scanForRobots({Duration duration = _scanDuration}) {
+    StreamSubscription<List<ScanResult>>? resultsSub;
+    StreamSubscription<bool>? scanningSub;
+    int myScan = -1;
+    bool finished = false;
+    late final StreamController<List<FoundRobot>> out;
+
+    Future<void> finish() async {
+      if (finished) return;
+      finished = true;
+      // Decide before awaiting anything, while nobody else can have started
+      // a scan that we would stop by mistake.
+      final stopOurScan = myScan == _scanGeneration && FlutterBluePlus.isScanningNow;
+      final r = resultsSub, s = scanningSub;
+      resultsSub = null;
+      scanningSub = null;
+      await r?.cancel();
+      await s?.cancel();
+      if (stopOurScan) {
+        try {
+          await FlutterBluePlus.stopScan();
+        } catch (_) {}
+      }
+      // Not awaited: after a cancel there may be no listener to take "done".
+      if (!out.isClosed) out.close();
+    }
+
+    out = StreamController<List<FoundRobot>>(
+      onListen: () async {
+        try {
+          if (await FlutterBluePlus.isSupported == false) {
+            throw StateError('Bluetooth is not supported on this device');
+          }
+          myScan = ++_scanGeneration;
+          await FlutterBluePlus.startScan(timeout: duration);
+          if (finished) {
+            // Cancelled while the scan was starting.
+            if (myScan == _scanGeneration && FlutterBluePlus.isScanningNow) {
+              await FlutterBluePlus.stopScan();
+            }
+            return;
+          }
+          resultsSub = FlutterBluePlus.scanResults.listen((results) {
+            if (out.isClosed) return;
+            out.add([
+              for (final r in results)
+                if (isRobotName(_nameOf(r)))
+                  FoundRobot(id: r.device.remoteId.str, name: _nameOf(r), rssi: r.rssi),
+            ]);
+          }, onError: (Object e) {
+            if (!out.isClosed) out.addError(e);
+          });
+          // isScanning re-emits its current value, so a scan that already
+          // ended (or was replaced) finishes us straight away.
+          scanningSub = FlutterBluePlus.isScanning.listen((scanning) {
+            if (!scanning) finish();
+          });
+        } catch (e) {
+          if (!out.isClosed) out.addError(e);
+          await finish();
+        }
+      },
+      onCancel: finish,
+    );
+    return out.stream;
+  }
 
   @override
   Stream<RobotConnectionState> get stateStream => _stateController.stream;
@@ -52,6 +150,7 @@ class BluetoothStrategy implements RobotConnection {
   @override
   Future<void> connect({String? deviceId}) async {
     if (_currentState != RobotConnectionState.disconnected || _disposed) return;
+    final attempt = _attempt;
     _userDisconnected = false;
     _reconnectAttempts = 0;
 
@@ -62,46 +161,64 @@ class BluetoothStrategy implements RobotConnection {
 
     _updateState(RobotConnectionState.connecting);
 
-    // Fast path: reconnect to the device we used last time.
+    // A connect started before the last disconnect() may still be running
+    // (the phone makes one connection at a time). Let it finish and clean up
+    // first, so it can't disconnect or overwrite this one.
+    final pending = _pendingConnect;
+    if (pending != null) await pending;
+    if (attempt != _attempt || _disposed) return;
+
+    // Fast path: reconnect to the device we used last time (if it is the one
+    // asked for).
     final last = _lastDevice;
-    if (last != null && deviceId == null) {
-      if (await _connectToDevice(last)) return;
-      if (_userDisconnected) return;
+    if (last != null && (deviceId == null || last.remoteId.str == deviceId)) {
+      if (await _connectToDevice(last, attempt)) return;
+      if (attempt != _attempt || _disposed) return;
     }
-    await _scanAndConnect(deviceId);
+    await _scanAndConnect(deviceId, attempt);
   }
 
-  Future<void> _scanAndConnect(String? deviceId) async {
+  /// Scans until a robot matching [deviceId] (any robot if null) shows up,
+  /// then connects. Gives up quietly once [attempt] is out of date.
+  Future<void> _scanAndConnect(String? deviceId, int attempt) async {
+    bool stale() => attempt != _attempt || _disposed;
     try {
       if (FlutterBluePlus.isScanningNow) {
         await FlutterBluePlus.stopScan();
       }
 
       await _scanSub?.cancel();
+      if (stale()) return;
+      _myScan = ++_scanGeneration;
       _scanSub = FlutterBluePlus.scanResults.listen((results) async {
+        if (stale()) return;
         for (final r in results) {
-          final name = r.device.platformName.isNotEmpty
-              ? r.device.platformName
-              : r.advertisementData.advName;
+          final name = _nameOf(r);
           final matches = deviceId != null
               ? (r.device.remoteId.str == deviceId || name == deviceId)
-              : _targetNames.any(name.contains);
+              : isRobotName(name);
           if (matches) {
             await _scanSub?.cancel();
             _scanSub = null;
             _scanTimeout?.cancel();
             await FlutterBluePlus.stopScan();
-            await _connectToDevice(r.device);
+            if (!stale()) await _connectToDevice(r.device, attempt);
             break;
           }
         }
       });
 
       await FlutterBluePlus.startScan(timeout: _scanDuration);
+      if (stale()) return;
 
       _scanTimeout?.cancel();
       _scanTimeout = Timer(_scanDuration + const Duration(seconds: 1), () {
-        if (_currentState == RobotConnectionState.connecting && _connectedDevice == null) {
+        if (stale()) return;
+        // _scanSub is null once a robot matched (possibly from results that
+        // were already there before this timer was set): connecting, not lost.
+        if (_scanSub != null &&
+            _currentState == RobotConnectionState.connecting &&
+            _connectedDevice == null) {
           _scanSub?.cancel();
           _scanSub = null;
           debugPrint("BLE: no robot found (looking for names containing $_targetNames)");
@@ -110,14 +227,21 @@ class BluetoothStrategy implements RobotConnection {
       });
     } catch (e) {
       debugPrint("BLE Scan Error: $e");
-      _updateState(RobotConnectionState.disconnected);
+      if (!stale()) _updateState(RobotConnectionState.disconnected);
     }
   }
 
-  Future<bool> _connectToDevice(BluetoothDevice device) async {
+  Future<bool> _connectToDevice(BluetoothDevice device, int attempt) =>
+      _pendingConnect = _connectToDeviceOnce(device, attempt);
+
+  /// One connection attempt, on behalf of [attempt]. Once disconnect() has
+  /// run, the attempt is stale: it only cleans up its own device and leaves
+  /// the shared state to whatever connect() comes next.
+  Future<bool> _connectToDeviceOnce(BluetoothDevice device, int attempt) async {
+    bool stale() => _userDisconnected || _disposed || attempt != _attempt;
     try {
       await device.connect(timeout: const Duration(seconds: 15));
-      if (_userDisconnected || _disposed) {
+      if (stale()) {
         // disconnect()/dispose() ran while we were connecting.
         try {
           await device.disconnect();
@@ -156,8 +280,12 @@ class BluetoothStrategy implements RobotConnection {
 
       if (_txCharacteristic == null) {
         debugPrint("BLE: no writable characteristic found — disconnecting");
+        // Not a drop: don't let the listener start a reconnect loop.
+        _connectionStateSub?.cancel();
+        _connectionStateSub = null;
+        _connectedDevice = null;
         await device.disconnect();
-        _updateState(RobotConnectionState.disconnected);
+        if (!stale()) _updateState(RobotConnectionState.disconnected);
         return false;
       }
 
@@ -174,6 +302,17 @@ class BluetoothStrategy implements RobotConnection {
         }
       }
 
+      if (stale()) {
+        // Set up after disconnect() ran; no newer attempt has started yet
+        // (connect() waits for this one), so these are ours to undo.
+        _notifySub?.cancel();
+        _notifySub = null;
+        try {
+          await device.disconnect();
+        } catch (_) {}
+        return false;
+      }
+
       debugPrint("BLE: connected to ${device.platformName}");
       _reconnectAttempts = 0;
       _updateState(RobotConnectionState.connected);
@@ -181,6 +320,12 @@ class BluetoothStrategy implements RobotConnection {
       return true;
     } catch (e) {
       debugPrint("BLE Connection Error: $e");
+      if (attempt != _attempt) {
+        try {
+          await device.disconnect();
+        } catch (_) {}
+        return false;
+      }
       _connectedDevice = null;
       _txCharacteristic = null;
       _rxCharacteristic = null;
@@ -223,13 +368,18 @@ class BluetoothStrategy implements RobotConnection {
     _updateState(RobotConnectionState.connecting);
     debugPrint("BLE: link lost, reconnect attempt $_reconnectAttempts");
     _reconnectPending = true;
+    final attempt = _attempt;
     Future.delayed(const Duration(seconds: 2), () async {
+      // disconnect() ran meanwhile: it set the state, and a newer connect()
+      // may own it now.
+      if (attempt != _attempt) return;
       if (_userDisconnected || _disposed) {
         _reconnectPending = false;
         _updateState(RobotConnectionState.disconnected);
         return;
       }
-      final ok = await _connectToDevice(_lastDevice!);
+      final ok = await _connectToDevice(_lastDevice!, attempt);
+      if (attempt != _attempt) return;
       _reconnectPending = false;
       if (!ok && !_userDisconnected && !_disposed) _onDropped();
     });
@@ -260,10 +410,13 @@ class BluetoothStrategy implements RobotConnection {
   @override
   Future<void> disconnect() async {
     _userDisconnected = true;
+    _attempt++;
+    _reconnectPending = false; // a pending reconnect gives up (attempt changed)
     _scanTimeout?.cancel();
     await _scanSub?.cancel();
     _scanSub = null;
-    if (FlutterBluePlus.isScanningNow) {
+    // Only our own scan: the robot list may be scanning right now.
+    if (_myScan == _scanGeneration && FlutterBluePlus.isScanningNow) {
       try {
         await FlutterBluePlus.stopScan();
       } catch (_) {}

@@ -38,8 +38,8 @@ class BoardInfo {
 }
 
 /// Owns the active transport and exposes a single command/state/message
-/// surface to the rest of the app. Remembers the last used transport and
-/// WiFi address.
+/// surface to the rest of the app. Remembers the last used transport, WiFi
+/// address and the robot picked in the Bluetooth list.
 class ConnectivityManager {
   static final ConnectivityManager _instance = ConnectivityManager._internal();
   factory ConnectivityManager() => _instance;
@@ -47,10 +47,12 @@ class ConnectivityManager {
 
   static const _prefType = 'connection_type';
   static const _prefWifiHost = 'connection_wifi_host';
+  static const _prefBleDevice = 'connection_ble_device';
 
   RobotConnection? _activeConnection;
   ConnectionType _activeType = ConnectionType.bluetooth;
   String _wifiHost = WifiStrategy.mdnsHost;
+  String? _bleDeviceId;
   StreamSubscription? _strategySub;
   StreamSubscription? _inboundSub;
   bool _prefsLoaded = false;
@@ -72,6 +74,8 @@ class ConnectivityManager {
   bool get isConnected => state == RobotConnectionState.connected;
   ConnectionType get activeType => _activeType;
   String get wifiHost => _wifiHost;
+  /// The robot picked in the Bluetooth list; null = the first robot found.
+  String? get bluetoothDeviceId => _bleDeviceId;
   BoardInfo get board => _board;
 
   RobotConnection get connection {
@@ -92,12 +96,21 @@ class ConnectivityManager {
       orElse: () => ConnectionType.bluetooth,
     );
     _wifiHost = prefs.getString(_prefWifiHost) ?? _wifiHost;
+    _bleDeviceId = prefs.getString(_prefBleDevice);
   }
 
   Future<void> setWifiHost(String hostPort) async {
     _wifiHost = hostPort.trim();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefWifiHost, _wifiHost);
+  }
+
+  /// Bluetooth connects go to this robot from now on (also after a restart).
+  Future<void> setBluetoothDevice(String id) async {
+    await loadPreferences(); // so a later load can't overwrite the choice
+    _bleDeviceId = id;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefBleDevice, id);
   }
 
   Future<void> setType(ConnectionType type) async {
@@ -200,7 +213,11 @@ class ConnectivityManager {
 
   Future<void> connect() async {
     await loadPreferences();
-    final id = _activeType == ConnectionType.wifi ? _wifiHost : null;
+    final id = switch (_activeType) {
+      ConnectionType.wifi => _wifiHost,
+      ConnectionType.bluetooth => _bleDeviceId,
+      ConnectionType.serial => null,
+    };
     await connection.connect(deviceId: id);
   }
 

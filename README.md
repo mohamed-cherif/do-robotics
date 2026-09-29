@@ -57,10 +57,12 @@ emulator can only show the UI. To make an APK file you can keep and copy
 to other phones instead, see [Build an installable app](#build-an-installable-app-apk).
 
 **3. Connect.** On the **Home** tab tap the header ("SYSTEM OFFLINE") and
-choose **Bluetooth** (ESP32 — it advertises as *ESP32 Robot XXXX*, where
-XXXX are the last 4 hex digits of the board's MAC address) or **USB
-Serial (OTG)** (any board, via an OTG adapter). Accept the permission
-prompts. The header turns green: *SYSTEM ONLINE*.
+choose **Bluetooth** (ESP32) or **USB Serial (OTG)** (any board, via an
+OTG adapter). Accept the permission prompts. Bluetooth shows the robots in
+range, closest first: tap yours — *ESP32 Robot XXXX*, where XXXX are the
+last 4 hex digits of the board's MAC address. The app remembers it and
+reconnects to that robot next time. The header turns green: *SYSTEM
+ONLINE*.
 
 **4. Tell the app what's wired.** Home › **Configure Hardware** › Add
 Actuator: e.g. an LED on pin 2 (the ESP32's built-in LED) or pin 13

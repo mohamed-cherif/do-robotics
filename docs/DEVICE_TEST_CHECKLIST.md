@@ -29,6 +29,13 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
 - [ ] Robot off → "Couldn't connect over Bluetooth…" SnackBar within ~12 s.
 - [ ] Power-cycle the robot while connected → app shows connecting, then reconnects (max 5 tries).
 - [ ] While connected, tap the header → menu opens (Disconnect, Set up robot WiFi).
+- [ ] Header › Bluetooth with two robots on: both are listed, closer one
+      first; tap one → connects to that one. Restart the app → it
+      reconnects to the same robot, not the other.
+- [ ] Open the list right after starting the app (while it is still
+      connecting): no "Couldn't connect" message; the list works.
+- [ ] Robot switched off → the list says "No robots found"; Search again
+      finds it after switching it on.
 
 ## 3. USB serial (Uno/Mega/ESP32 over OTG)
 

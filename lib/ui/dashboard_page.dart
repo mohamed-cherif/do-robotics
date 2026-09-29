@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../services/connectivity/bluetooth_strategy.dart';
 import '../services/connectivity/connectivity_manager.dart';
 import '../services/connectivity/robot_connection.dart';
 import '../services/sensor_service.dart';
@@ -11,6 +12,7 @@ import 'actuator_settings_page.dart';
 import 'neural_core_header.dart';
 import 'python_bus.dart';
 import 'python_page.dart';
+import 'robot_picker_dialog.dart';
 import 'robot_wifi_dialog.dart';
 import 'sensors_page.dart';
 import 'tutorial_detail_page.dart';
@@ -33,6 +35,8 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
       .map((_) => (_sensorService.isShaking, _sensorService.isTilted))
       .distinct();
   RobotConnectionState _lastConnectionState = RobotConnectionState.disconnected;
+  /// While the robot list is open, a stopped connect attempt isn't a failure.
+  bool _robotListOpen = false;
 
   @override
   void initState() {
@@ -87,7 +91,9 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   void _onConnectionState(RobotConnectionState s) {
     final wasConnecting = _lastConnectionState == RobotConnectionState.connecting;
     _lastConnectionState = s;
-    if (!mounted || !wasConnecting || s != RobotConnectionState.disconnected) return;
+    if (!mounted || _robotListOpen || !wasConnecting || s != RobotConnectionState.disconnected) {
+      return;
+    }
     final hint = switch (_connectivity.activeType) {
       ConnectionType.bluetooth =>
         'Is the robot powered and nearby, and is Bluetooth on? Tap the header to retry.',
@@ -100,6 +106,31 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
       content: Text("Couldn't connect over ${_connectivity.activeType.displayName}. $hint"),
       duration: const Duration(seconds: 5),
     ));
+  }
+
+  /// Lets the user pick one of the robots in range; it is remembered, so the
+  /// app reconnects to that robot (not just the first one found) next time.
+  Future<void> _chooseBluetoothRobot() async {
+    _robotListOpen = true;
+    try {
+      // A Bluetooth connect attempt still searching would grab the first
+      // robot the list's scan finds, so stop it first.
+      if (_connectivity.activeType == ConnectionType.bluetooth &&
+          _connectivity.state == RobotConnectionState.connecting) {
+        await _connectivity.disconnect();
+      }
+      if (!mounted) return;
+      final robot = await showDialog<FoundRobot>(
+        context: context,
+        builder: (_) => RobotPickerDialog(rememberedId: _connectivity.bluetoothDeviceId),
+      );
+      if (robot == null) return;
+      await _connectivity.setBluetoothDevice(robot.id);
+      _robotListOpen = false; // failures from here on are real
+      await _switchAndConnect(ConnectionType.bluetooth, reconnect: true);
+    } finally {
+      _robotListOpen = false;
+    }
   }
 
   Future<void> _promptWifiHost() async {
@@ -135,7 +166,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             child: const Row(children: [Icon(Icons.bluetooth), SizedBox(width: 8), Text("Bluetooth")]),
             onPressed: () {
               Navigator.pop(context);
-              _switchAndConnect(ConnectionType.bluetooth);
+              _chooseBluetoothRobot();
             },
           ),
           // USB serial to a microcontroller is only possible on Android.
