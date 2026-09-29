@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
+import 'vision_preferences.dart';
+
 class DetectionResult {
   final Rect boundingBox;
   final String label;
@@ -61,6 +63,8 @@ class ObjectDetectorService {
   bool lineMode = false;
   /// Minimum score a detection must reach to be reported.
   double confidenceThreshold = 0.35;
+  /// Frame-rate cap and thread budget (see [VisionPerformance]).
+  VisionPerformance performance = VisionPerformance.fast;
 
   // Simple rolling inference-time stat for the HUD / logs.
   double _avgInferenceMs = 0;
@@ -122,7 +126,8 @@ class ObjectDetectorService {
       final sendPort = await portReady.future.timeout(const Duration(seconds: 10));
       final modelData = await rootBundle.load(modelAsset);
       final labelsStr = await rootBundle.loadString(labelsAsset);
-      sendPort.send(_InitCommand(modelData.buffer.asUint8List(), labelsStr));
+      sendPort.send(_InitCommand(
+          modelData.buffer.asUint8List(), labelsStr, performance.maxThreads));
       final error = await modelReady.future.timeout(const Duration(seconds: 20),
           onTimeout: () => 'timed out loading the model');
       if (error != null) {
@@ -151,13 +156,12 @@ class ObjectDetectorService {
   }
 
   DateTime _lastProcessTime = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _throttle = Duration(milliseconds: 40); // ~25 FPS cap
 
   void processFrame(CameraImage cameraImage, {List<String> activeLabels = const [], int rotation = 90}) {
     if (!_isReady || _isProcessing) return;
 
     final now = DateTime.now();
-    if (now.difference(_lastProcessTime) < _throttle) return;
+    if (now.difference(_lastProcessTime) < performance.frameInterval) return;
     _lastProcessTime = now;
     _frameSentAt = now;
 
@@ -222,7 +226,8 @@ class ObjectDetectorService {
         try {
           final options = InterpreterOptions();
           final cores = Platform.numberOfProcessors;
-          final threads = cores >= 4 ? 4 : (cores > 1 ? cores - 1 : 1);
+          final threads = (cores >= 4 ? 4 : (cores > 1 ? cores - 1 : 1))
+              .clamp(1, message.maxThreads);
           options.threads = threads;
           if (Platform.isAndroid) {
             options.addDelegate(
@@ -729,7 +734,8 @@ class _ModelStatus {
 class _InitCommand {
   final Uint8List modelBytes;
   final String labels;
-  _InitCommand(this.modelBytes, this.labels);
+  final int maxThreads;
+  _InitCommand(this.modelBytes, this.labels, this.maxThreads);
 }
 
 class _FrameCmd {

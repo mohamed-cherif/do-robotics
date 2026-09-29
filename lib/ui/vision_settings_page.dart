@@ -14,6 +14,7 @@ class _VisionSettingsPageState extends State<VisionSettingsPage> {
   Set<String> _selectedLabels = {};
   bool _upsideDown = false;
   double _confidence = VisionPreferences.defaultConfidence;
+  VisionPerformance _performance = VisionPerformance.fast;
   bool _isLoading = true;
   String _search = '';
 
@@ -27,11 +28,13 @@ class _VisionSettingsPageState extends State<VisionSettingsPage> {
     final labels = await VisionPreferences.getEnabledLabels();
     final upsideDown = await VisionPreferences.getUpsideDown();
     final confidence = await VisionPreferences.getConfidenceThreshold();
+    final performance = await VisionPreferences.getPerformance();
     if (!mounted) return;
     setState(() {
       _selectedLabels = labels;
       _upsideDown = upsideDown;
       _confidence = confidence;
+      _performance = performance;
       _isLoading = false;
     });
   }
@@ -40,6 +43,7 @@ class _VisionSettingsPageState extends State<VisionSettingsPage> {
     await VisionPreferences.setEnabledLabels(_selectedLabels);
     await VisionPreferences.setUpsideDown(_upsideDown);
     await VisionPreferences.setConfidenceThreshold(_confidence);
+    await VisionPreferences.setPerformance(_performance);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -84,10 +88,44 @@ class _VisionSettingsPageState extends State<VisionSettingsPage> {
                               style: TextStyle(color: Colors.white)),
                           subtitle: const Text(
                             'Turn on if the phone is fixed to the robot with the '
-                            'top of the screen pointing at the floor. Left/right '
-                            'steering is flipped otherwise.',
+                            'top of the screen pointing at the floor, so the AI '
+                            'sees the picture the right way up. If the robot then '
+                            'turns the wrong way, set Smart Follow\'s steering to '
+                            'REVERSED (or flip the sign in your program).',
                             style: TextStyle(color: Colors.white60, fontSize: 12),
                           ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _card(
+                        title: 'Performance',
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            RadioGroup<VisionPerformance>(
+                              groupValue: _performance,
+                              onChanged: (v) => setState(() => _performance = v ?? _performance),
+                              child: Column(
+                                children: [
+                                  for (final p in VisionPerformance.values)
+                                    RadioListTile<VisionPerformance>(
+                                      contentPadding: EdgeInsets.zero,
+                                      dense: true,
+                                      value: p,
+                                      activeColor: Colors.greenAccent,
+                                      title: Text(p.label, style: const TextStyle(color: Colors.white)),
+                                      subtitle: Text(p.description,
+                                          style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            const Text(
+                              'Slower settings keep older or cheaper phones cool and save '
+                              'battery; the robot reacts a little later.',
+                              style: TextStyle(color: Colors.white60, fontSize: 12),
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 12),

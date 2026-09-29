@@ -128,6 +128,8 @@ class VisionService {
   Future<void> _refreshSettings() async {
     upsideDown = await VisionPreferences.getUpsideDown();
     _detector.confidenceThreshold = await VisionPreferences.getConfidenceThreshold();
+    // Frame rate applies immediately; the thread count on the next camera start.
+    _detector.performance = await VisionPreferences.getPerformance();
   }
 
   List<DetectedObjectData> _lastDetections = [];
