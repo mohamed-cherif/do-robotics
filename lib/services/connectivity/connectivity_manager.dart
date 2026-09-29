@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../utils/execution_logger.dart';
 import 'frame_parser.dart';
 import 'robot_connection.dart';
 import 'robot_protocol.dart';
@@ -175,7 +176,27 @@ class ConnectivityManager {
         break;
     }
     debugPrint("Board → phone: ${f.text.replaceAll('\t', ' | ')}");
+    final line = logLineFor(f);
+    if (line != null) ExecutionLogger().log(line);
     _messageController.add(f);
+  }
+
+  /// The line the execution log shows for a board message, or null if it
+  /// isn't worth showing there. The firmware sends at most one ERR a second.
+  static String? logLineFor(TextFrame f) {
+    final detail = f.fields.skip(1).join(' ');
+    switch (f.command) {
+      case 'ERR':
+        // Uno/Mega answer every text command this way; not a program problem.
+        if (detail == 'unsupported') return null;
+        if (detail.startsWith('bad pin ')) {
+          return "Robot: pin ${detail.substring(8)} can't be used on this board";
+        }
+        return 'Robot: $detail';
+      case 'WATCHDOG':
+        return 'Robot stopped its outputs: no signal from the phone for 2 s';
+    }
+    return null;
   }
 
   Future<void> connect() async {

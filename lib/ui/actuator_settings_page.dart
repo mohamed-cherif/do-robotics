@@ -260,11 +260,16 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
     }
   }
 
-  // Common Pin Labels for ESP32/Uno
+  // Common Pin Labels for ESP32/Uno. The ESP32 firmware refuses 0, 1, 3,
+  // 6-11 and GPIOs the chip doesn't have (the log shows "can't be used").
   String _getPinLabel(int pin) {
-    if (pin == 0 || pin == 1) return "Reserved for Serial (Uno)";
+    if (pin == 0) return "Reserved for Serial (Uno) · Boot button, not usable (ESP32)";
+    if (pin == 1) return "Reserved for Serial (Uno, ESP32)";
     if (pin == 2) return "Built-in LED (ESP32)";
+    if (pin == 3) return "Serial, not usable (ESP32)";
+    if (pin >= 6 && pin <= 11) return "Flash memory, not usable (ESP32)";
     if (pin == 13) return "Built-in LED (Uno)";
+    if (pin == 20 || pin == 24 || (pin >= 28 && pin <= 31)) return "Not on ESP32";
     if (pin >= 34 && pin <= 39) return "Input Only (ESP32)";
     return "";
   }
