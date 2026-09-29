@@ -83,6 +83,20 @@ void main() {
     expect(runner.state, ExecutionState.idle);
   });
 
+  test('rapid RUN/STOP cycles never throw and always end idle', () async {
+    runner.loadScript([
+      block('logic_forever', nested: {'do': block('logic_wait', inputs: {'seconds': 0.05})}),
+    ]);
+    for (var i = 0; i < 20; i++) {
+      unawaited(runner.play());
+      await Future<void>.delayed(Duration(milliseconds: i.isEven ? 1 : 30));
+      runner.stop();
+    }
+    // Let every teardown finish, then check nothing is still running.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    expect(runner.state, ExecutionState.idle);
+  });
+
   group('new blocks', () {
     BlockInstance number(num v) => block('math_number', inputs: {'value': v});
 
