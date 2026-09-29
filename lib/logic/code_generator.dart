@@ -1,0 +1,307 @@
+import '../models/block_models.dart';
+
+/// Converts a block program into runnable RoboPython (the same API the
+/// Python tab executes). One-way: the result is meant to be edited further.
+class CodeGenerator {
+  static String generateCode(List<BlockInstance> script) {
+    if (script.isEmpty) return "# No blocks yet.\n# Drag blocks onto the canvas, then convert.\n";
+    return _Gen(script).generate();
+  }
+}
+
+class _Gen {
+  final List<BlockInstance> script;
+  final Map<String, String> _varForActuator = {}; // block id prefix → variable name
+  final Set<String> _usedVars = {};
+  final List<String> _declarations = [];
+  _Gen(this.script);
+
+  String generate() {
+    final body = StringBuffer();
+    for (final block in script) {
+      body.write(_stmt(block, 0));
+      body.writeln();
+    }
+    final out = StringBuffer();
+    out.writeln("import robot");
+    if (_declarations.isNotEmpty) {
+      out.writeln();
+      for (final d in _declarations) {
+        out.writeln(d);
+      }
+    }
+    out.writeln();
+    out.write(body.toString().trimRight());
+    out.writeln();
+    return out.toString();
+  }
+
+  // ── Actuator variables ─────────────────────────────────────────────────────
+
+  /// Returns the Python variable bound to this actuator block, declaring it on
+  /// first use, e.g. `left_wheel = robot.motor("Left Wheel")`.
+  String _actuatorVar(BlockInstance block) {
+    final id = block.definition.id;
+    final key = id.startsWith('act_servo_track_x_')
+        ? 'act_servo_${id.substring('act_servo_track_x_'.length)}'
+        : id;
+    final existing = _varForActuator[key];
+    if (existing != null) return existing;
+
+    final label = block.definition.label
+        .replaceAll(RegExp(r'^Track X: '), '')
+        .replaceAll(RegExp(r'[^a-zA-Z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '')
+        .toLowerCase();
+    var name = label.isEmpty || RegExp(r'^\d').hasMatch(label) ? 'device_$label' : label;
+    if (_pyKeywords.contains(name)) name = '${name}_';
+    var candidate = name;
+    int n = 2;
+    while (_usedVars.contains(candidate)) {
+      candidate = '$name$n';
+      n++;
+    }
+    _usedVars.add(candidate);
+    _varForActuator[key] = candidate;
+
+    final kind = key.startsWith('act_motor_')
+        ? 'motor'
+        : key.startsWith('act_servo_')
+            ? 'servo'
+            : key.startsWith('act_led_')
+                ? 'led'
+                : key.startsWith('act_buzzer_')
+                    ? 'buzzer'
+                    : 'switch';
+    final displayName = block.definition.label.replaceAll(RegExp(r'^Track X: '), '');
+    _declarations.add('$candidate = robot.$kind(${_str(displayName)})');
+    return candidate;
+  }
+
+  static const Set<String> _pyKeywords = {
+    'if', 'else', 'while', 'for', 'in', 'def', 'return', 'and', 'or', 'not', 'import', 'from', 'pass',
+    'break', 'continue', 'global', 'lambda', 'class', 'robot', 'time', 'math', 'random', 'print',
+  };
+
+  // ── Statements ─────────────────────────────────────────────────────────────
+
+  String _ind(int level) => '    ' * level;
+
+  String _body(BlockInstance? block, int level) {
+    if (block == null) return '${_ind(level)}pass\n';
+    return _stmt(block, level);
+  }
+
+  String _stmt(BlockInstance block, int level) {
+    final ind = _ind(level);
+    final out = StringBuffer();
+    final id = block.definition.id;
+
+    switch (id) {
+      case 'logic_if':
+        out.writeln('${ind}if ${_bool(block.nestedBlocks['condition'])}:');
+        out.write(_body(block.nestedBlocks['then'], level + 1));
+        break;
+      case 'logic_if_else':
+        out.writeln('${ind}if ${_bool(block.nestedBlocks['condition'])}:');
+        out.write(_body(block.nestedBlocks['then'], level + 1));
+        out.writeln('${ind}else:');
+        out.write(_body(block.nestedBlocks['else'], level + 1));
+        break;
+      case 'logic_while':
+        out.writeln('${ind}while ${_bool(block.nestedBlocks['condition'])}:');
+        out.write(_body(block.nestedBlocks['do'], level + 1));
+        if (block.nestedBlocks['do'] != null) {
+          out.writeln('${_ind(level + 1)}robot.wait(0.02)');
+        }
+        break;
+      case 'logic_repeat':
+        out.writeln('${ind}for i in range(${_numLit(block.inputValues['times'], 3)}):');
+        out.write(_body(block.nestedBlocks['do'], level + 1));
+        break;
+      case 'logic_wait':
+        out.writeln('${ind}robot.wait(${_numLit(block.inputValues['seconds'], 1)})');
+        break;
+      case 'logic_stop':
+        out.writeln('${ind}robot.stop()');
+        break;
+      case 'act_print':
+        out.writeln('${ind}print(${_expr(block.nestedBlocks['value'])})');
+        break;
+      case 'act_say':
+        out.writeln('${ind}robot.say(${_str(block.inputValues['text']?.toString() ?? '')})');
+        break;
+      case 'act_smart_follow':
+        out.write(_smartFollow(block, level));
+        break;
+      default:
+        if (id.startsWith('act_')) {
+          out.write(_actuatorStmt(block, level));
+        } else {
+          out.writeln('$ind# ${block.definition.label}');
+        }
+    }
+
+    if (block.nextBlock != null) {
+      out.write(_stmt(block.nextBlock!, level));
+    }
+    return out.toString();
+  }
+
+  String _actuatorStmt(BlockInstance block, int level) {
+    final ind = _ind(level);
+    final id = block.definition.id;
+    final v = _actuatorVar(block);
+    final inputs = block.definition.inputs;
+
+    if (id.startsWith('act_servo_track_x_')) {
+      final multi = _numLit(block.inputValues['multiplier'], 90);
+      return '$ind$v.angle(int(90 - robot.vision.offset_x * $multi))\n';
+    }
+    if (inputs.any((i) => i.id == 'direction')) {
+      final dir = (block.inputValues['direction'] ?? 'FORWARD').toString().toUpperCase();
+      final isServo = id.startsWith('act_servo_');
+      final speed = _numLit(block.inputValues['speed'], isServo ? 75 : 128);
+      if (dir == 'STOP') return '$ind$v.stop()\n';
+      return '$ind$v.${dir.toLowerCase()}($speed)\n';
+    }
+    if (inputs.any((i) => i.id == 'state')) {
+      final state = (block.inputValues['state'] ?? 'ON').toString().toUpperCase();
+      return '$ind$v.${state.toLowerCase()}()\n';
+    }
+    if (inputs.any((i) => i.id == 'angle')) {
+      final angleBlock = block.nestedBlocks['angle'];
+      final angle = angleBlock != null ? 'int(${_expr(angleBlock)})' : _numLit(block.inputValues['angle'], 90);
+      return '$ind$v.angle($angle)\n';
+    }
+    return '$ind# ${block.definition.label}\n';
+  }
+
+  String _smartFollow(BlockInstance block, int level) {
+    final ind = _ind(level);
+    final i1 = _ind(level + 1);
+    final i2 = _ind(level + 2);
+    final mode = (block.inputValues['mode'] ?? 'FETCH').toString().toUpperCase();
+    final speed = _numLit(block.inputValues['baseSpeed'], 100);
+    final arrived = _numLit(block.inputValues['arrivedPct'], 30);
+    final sign = (block.inputValues['steering'] ?? 'NORMAL').toString() == 'REVERSED' ? '-' : '';
+    final out = StringBuffer();
+    out.writeln('$ind# Smart Follow ($mode): uses the first two motors as left / right');
+    out.writeln('${ind}left, right = robot.motor(robot.actuators[0]), robot.motor(robot.actuators[1])');
+    out.writeln('${ind}search_dir = 1');
+    out.writeln('${ind}while True:');
+    out.writeln('${i1}if robot.vision.detected:');
+    out.writeln('${i2}if robot.vision.size > $arrived:');
+    out.writeln('${_ind(level + 3)}left.stop(); right.stop()');
+    out.writeln('${_ind(level + 3)}break');
+    out.writeln('${i2}x = ${sign}robot.vision.offset_x');
+    out.writeln('${i2}if abs(x) > 0.05: search_dir = 1 if x > 0 else -1');
+    out.writeln('${i2}if x > 0.2: left.forward($speed); right.stop()');
+    out.writeln('${i2}elif x < -0.2: left.stop(); right.forward($speed)');
+    out.writeln('${i2}else: left.forward($speed); right.forward($speed)');
+    if (mode == 'FOLLOW') {
+      out.writeln('${i1}else:');
+      out.writeln('${i2}left.stop(); right.stop()');
+    } else {
+      out.writeln('${i1}elif search_dir > 0: left.forward($speed); right.stop()');
+      out.writeln('${i1}else: left.stop(); right.forward($speed)');
+    }
+    out.writeln('${i1}robot.wait(0.06)');
+    out.writeln('${i1}left.stop(); right.stop()');
+    out.writeln('${i1}robot.wait(0.08)');
+    return out.toString();
+  }
+
+  // ── Expressions ────────────────────────────────────────────────────────────
+
+  String _str(String v) => "'${v.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'";
+
+  String _numLit(dynamic v, num fallback) {
+    if (v is num) return v == v.truncateToDouble() && v is! int ? v.toInt().toString() : v.toString();
+    if (v is String) {
+      final n = num.tryParse(v.trim());
+      if (n != null) return _numLit(n, fallback);
+    }
+    return fallback.toString();
+  }
+
+  String _bool(BlockInstance? block) {
+    if (block == null) return 'False';
+    if (block.definition.shape == BlockShape.expression) return _expr(block);
+    switch (block.definition.id) {
+      case 'bool_true':
+        return 'True';
+      case 'bool_false':
+        return 'False';
+      case 'logic_expression':
+        return (block.inputValues['expression'] ?? 'True').toString();
+      case 'sense_object_detected':
+        return 'robot.vision.detected';
+      case 'sense_object_locked':
+        return 'robot.vision.lock(${_str((block.inputValues['target'] ?? 'person').toString().toLowerCase())})';
+      case 'sense_locked':
+        return 'robot.vision.locked';
+      case 'sense_line_detected':
+        return 'robot.vision.line_visible';
+      case 'sense_shake':
+        return 'robot.imu.shaking';
+      case 'sense_tilt':
+        return 'robot.imu.tilted';
+      case 'sense_rotating':
+        return 'robot.imu.spinning';
+      case 'sense_facing':
+        return 'robot.compass.facing(${_str(block.inputValues['direction']?.toString() ?? 'North')})';
+      case 'sense_loud':
+        return 'robot.mic.loud';
+      case 'sense_voice':
+        return 'robot.mic.heard(${_str(block.inputValues['phrase']?.toString() ?? '')})';
+      case 'bool_and':
+        return '(${_bool(block.nestedBlocks['left'])} and ${_bool(block.nestedBlocks['right'])})';
+      case 'bool_or':
+        return '(${_bool(block.nestedBlocks['left'])} or ${_bool(block.nestedBlocks['right'])})';
+      case 'bool_not':
+        return 'not ${_bool(block.nestedBlocks['value'])}';
+      case 'math_less_than':
+        return '${_expr(block.nestedBlocks['left'])} < ${_expr(block.nestedBlocks['right'])}';
+      case 'math_greater_than':
+        return '${_expr(block.nestedBlocks['left'])} > ${_expr(block.nestedBlocks['right'])}';
+      default:
+        return 'False';
+    }
+  }
+
+  String _expr(BlockInstance? block) {
+    if (block == null) return '0';
+    switch (block.definition.id) {
+      case 'sense_offset_x':
+        return 'robot.vision.offset_x';
+      case 'sense_offset_y':
+        return 'robot.vision.offset_y';
+      case 'sense_target_size':
+        return 'robot.vision.size';
+      case 'sense_line_offset_x':
+        return 'robot.vision.line_offset';
+      case 'sense_rotation_rate':
+        return 'robot.imu.yaw_rate';
+      case 'sense_tilt_angle_x':
+        return 'robot.imu.pitch';
+      case 'sense_tilt_angle_y':
+        return 'robot.imu.roll';
+      case 'sense_heading':
+        return 'robot.compass.heading';
+      case 'math_number':
+        return _numLit(block.inputValues['value'], 0);
+      case 'math_add':
+        return '(${_expr(block.nestedBlocks['left'])} + ${_expr(block.nestedBlocks['right'])})';
+      case 'math_subtract':
+        return '(${_expr(block.nestedBlocks['left'])} - ${_expr(block.nestedBlocks['right'])})';
+      case 'math_multiply':
+        return '(${_expr(block.nestedBlocks['left'])} * ${_expr(block.nestedBlocks['right'])})';
+      case 'math_divide':
+        return '(${_expr(block.nestedBlocks['left'])} / ${_expr(block.nestedBlocks['right'])})';
+      default:
+        if (block.definition.shape == BlockShape.boolean) return _bool(block);
+        return _numLit(block.inputValues['value'], 0);
+    }
+  }
+}

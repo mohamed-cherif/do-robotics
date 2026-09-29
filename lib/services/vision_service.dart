@@ -1,0 +1,385 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:camera/camera.dart';
+import 'package:flutter/material.dart';
+import 'object_detector_service.dart';
+import 'vision_preferences.dart';
+
+class DetectedObjectData {
+  final Rect boundingBox;
+  final List<String> labels;
+  final double confidence;
+
+  DetectedObjectData(this.boundingBox, this.labels, [this.confidence = 0.0]);
+
+  String get label => labels.isNotEmpty ? labels.first : 'unknown';
+}
+
+/// Camera ownership + object tracking on top of [ObjectDetectorService].
+///
+/// Bounding boxes are normalized (0..1) in *display* space (portrait preview).
+/// `targetOffsetX/Y` are -1..+1 with 0 at the frame centre; `targetArea` is
+/// the tracked box area as a percentage of the frame (a "closeness" proxy).
+class VisionService {
+  static final VisionService _instance = VisionService._internal();
+  factory VisionService() => _instance;
+  VisionService._internal();
+
+  final StreamController<List<DetectedObjectData>> _resultsController =
+      StreamController<List<DetectedObjectData>>.broadcast();
+  Stream<List<DetectedObjectData>> get resultsStream => _resultsController.stream;
+
+  String get loadedModelName => 'TFLite SSD-MobileNet (COCO)';
+  double get averageInferenceMs => _detector.averageInferenceMs;
+
+  // Camera management
+  CameraController? _camera;
+  CameraController? get cameraController => _camera;
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
+  bool get isStreaming => _camera?.value.isStreamingImages ?? false;
+
+  /// Phone mounted inverted on the robot. Loaded from [VisionPreferences].
+  bool upsideDown = false;
+  /// When true, run Sobel line detection instead of TFLite.
+  bool lineMode = false;
+
+  /// Users of the camera stream (pages, the block runner). The stream is only
+  /// torn down when the last user releases it, so leaving the camera page
+  /// while a script is running no longer kills the script's vision.
+  int _streamUsers = 0;
+
+  // Line detection state
+  double _lineOffsetX = 0.0;
+  bool _lineDetected = false;
+  double get lineOffsetX => _lineOffsetX;
+  bool get lineDetected => _lineDetected;
+  StreamSubscription? _prefSubscription;
+  StreamSubscription? _settingsSubscription;
+  StreamSubscription? _lineSub;
+  StreamSubscription? _detectionSub;
+
+  final ObjectDetectorService _detector = ObjectDetectorService();
+
+  bool get isObjectDetected => _lastDetections.isNotEmpty;
+
+  // Active label filters (empty means all)
+  List<String> _activeFilters = [];
+  List<String> get activeFilters => List.unmodifiable(_activeFilters);
+
+  // Tracking State
+  DetectedObjectData? _trackedObject;
+  int _lostFrames = 0;
+  /// Frames a locked target may be missing before the lock is dropped.
+  static const int lostFrameTolerance = 4;
+  bool get isLocked => _trackedObject != null;
+  DetectedObjectData? get trackedObject => _trackedObject;
+
+  String get targetLabel => _trackedObject?.label ?? "None";
+
+  /// -1.0 (left) .. +1.0 (right), 0 = centred. Coordinates are already in
+  /// physical phone-left/right space, so no sign flip is applied here.
+  double get targetOffsetX {
+    final t = _trackedObject;
+    if (t == null) return 0.0;
+    return (t.boundingBox.center.dx - 0.5) * 2;
+  }
+
+  /// -1.0 (top) .. +1.0 (bottom).
+  double get targetOffsetY {
+    final t = _trackedObject;
+    if (t == null) return 0.0;
+    return (t.boundingBox.center.dy - 0.5) * 2;
+  }
+
+  /// Tracked box area as a percentage (0..100) of the frame.
+  double get targetArea {
+    final t = _trackedObject;
+    if (t == null) return 0.0;
+    final r = t.boundingBox;
+    return (r.width * r.height) * 100.0;
+  }
+
+  void setActiveFilters(List<String> filters) {
+    _activeFilters = List.from(filters);
+  }
+
+  Future<void> refreshFilters() async {
+    final enabled = await VisionPreferences.getEnabledLabels();
+    _activeFilters = enabled.toList();
+  }
+
+  Future<void> _refreshSettings() async {
+    upsideDown = await VisionPreferences.getUpsideDown();
+    _detector.confidenceThreshold = await VisionPreferences.getConfidenceThreshold();
+  }
+
+  List<DetectedObjectData> _lastDetections = [];
+  List<DetectedObjectData> get lastDetections => List.unmodifiable(_lastDetections);
+
+  /// Lock on the detection closest to a tapped point (normalized coordinates).
+  void lockOn(Rect touchRect) {
+    if (_lastDetections.isEmpty) return;
+
+    DetectedObjectData? bestCandidate;
+    double minDist = double.infinity;
+    for (final obj in _lastDetections) {
+      final dist = (obj.boundingBox.center - touchRect.center).distance;
+      if (dist < minDist) {
+        minDist = dist;
+        bestCandidate = obj;
+      }
+    }
+    if (bestCandidate != null) {
+      _trackedObject = bestCandidate;
+      _lostFrames = 0;
+      debugPrint("VisionService: Locked on ${bestCandidate.label}");
+    }
+  }
+
+  /// Lock on the most confident detection carrying [label].
+  void autoLockOnLabel(String label) {
+    if (_lastDetections.isEmpty) return;
+
+    DetectedObjectData? bestCandidate;
+    double maxConfidence = -1.0;
+    for (final obj in _lastDetections) {
+      if (obj.labels.contains(label) && obj.confidence > maxConfidence) {
+        maxConfidence = obj.confidence;
+        bestCandidate = obj;
+      }
+    }
+    if (bestCandidate != null) {
+      _trackedObject = bestCandidate;
+      _lostFrames = 0;
+      debugPrint("VisionService: Auto-locked on ${bestCandidate.label}");
+    }
+  }
+
+  /// Locks on the highest-confidence detection regardless of label.
+  void autoLockOnBestDetection() {
+    if (_lastDetections.isEmpty) return;
+    final best = _lastDetections.reduce((a, b) => a.confidence > b.confidence ? a : b);
+    _trackedObject = best;
+    _lostFrames = 0;
+    debugPrint("VisionService: Auto-locked on ${best.label} (best confidence)");
+  }
+
+  void unlock() {
+    _trackedObject = null;
+    _lostFrames = 0;
+  }
+
+  /// Intersection-over-union of two rects (0..1). Public for tests.
+  static double computeIoU(Rect a, Rect b) {
+    final intersection = a.intersect(b);
+    if (intersection.isEmpty) return 0.0;
+    final interArea = intersection.width * intersection.height;
+    final unionArea = (a.width * a.height) + (b.width * b.height) - interArea;
+    return unionArea > 0 ? interArea / unionArea : 0.0;
+  }
+
+  /// Tracking association score: IoU plus proximity (0..2). Public for tests.
+  static double trackingScore(Rect previous, Rect candidate) {
+    final iou = computeIoU(previous, candidate);
+    final dist = (candidate.center - previous.center).distance;
+    // Max distance in normalized [0,1] space is sqrt(2) ≈ 1.414.
+    return iou + (1.0 - (dist / 1.414).clamp(0.0, 1.0));
+  }
+
+  /// Given the previous tracked object and the new frame's detections, pick the
+  /// detection to follow, or null if the target vanished. Public for tests.
+  static DetectedObjectData? associate(
+      DetectedObjectData tracked, List<DetectedObjectData> detections) {
+    final trackedLabel = tracked.label;
+    DetectedObjectData? bestMatch;
+    double bestScore = -1.0;
+    for (final candidate in detections) {
+      if (!candidate.labels.contains(trackedLabel)) continue;
+      final score = trackingScore(tracked.boundingBox, candidate.boundingBox);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = candidate;
+      }
+    }
+    if (bestMatch != null && bestScore > 0.2) return bestMatch;
+
+    // Spatial match failed — the target may have moved fast across the frame.
+    // If the same label is still detected anywhere, snap to the most confident
+    // instance rather than holding a stale position.
+    DetectedObjectData? fallback;
+    for (final c in detections) {
+      if (c.labels.contains(trackedLabel) &&
+          (fallback == null || c.confidence > fallback.confidence)) {
+        fallback = c;
+      }
+    }
+    return fallback;
+  }
+
+  Future<void> initialize() async {
+    if (_isInitialized) return;
+    try {
+      await refreshFilters();
+      await _refreshSettings();
+
+      _prefSubscription?.cancel();
+      _prefSubscription = VisionPreferences.changesStream.listen((newFilters) {
+        _activeFilters = newFilters.toList();
+      });
+      _settingsSubscription?.cancel();
+      _settingsSubscription = VisionPreferences.settingsStream.listen((_) {
+        _refreshSettings();
+      });
+
+      await _detector.initialize();
+
+      _lineSub?.cancel();
+      _lineSub = _detector.lineResultsStream.listen((result) {
+        _lineOffsetX = result.offsetX;
+        _lineDetected = result.detected;
+      });
+
+      _detectionSub?.cancel();
+      _detectionSub = _detector.resultsStream.listen(_onDetections);
+
+      _isInitialized = true;
+      debugPrint('✅ VisionService initialized');
+    } catch (e) {
+      debugPrint('❌ Vision service init error: $e');
+      rethrow;
+    }
+  }
+
+  void _onDetections(List<DetectionResult> results) {
+    final mapped = results
+        .map((r) => DetectedObjectData(r.boundingBox, [r.label], r.score))
+        .toList();
+    _lastDetections = mapped;
+
+    final tracked = _trackedObject;
+    if (tracked != null) {
+      final next = associate(tracked, mapped);
+      if (next != null) {
+        _trackedObject = next;
+        _lostFrames = 0;
+      } else if (++_lostFrames > lostFrameTolerance) {
+        // Hold the last position briefly, then clear. Never decay toward the
+        // centre — that made the robot "slide" toward a phantom target.
+        _trackedObject = null;
+      }
+    }
+
+    _resultsController.add(mapped);
+  }
+
+  /// Starts the camera stream. Every caller must later call [stopStream].
+  Future<void> startStream() async {
+    if (!_isInitialized) {
+      await initialize();
+    }
+    _streamUsers++;
+
+    if (_camera != null && _camera!.value.isStreamingImages) {
+      return;
+    }
+
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        throw StateError('No camera available on this device');
+      }
+      final camera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+
+      _camera = CameraController(
+        camera,
+        // 320x240 on most devices: the model input is 300x300 so anything
+        // larger is wasted work in the YUV→tensor loop.
+        ResolutionPreset.low,
+        enableAudio: false,
+        imageFormatGroup: Platform.isAndroid
+            ? ImageFormatGroup.yuv420 // reliable separate U/V planes
+            : ImageFormatGroup.bgra8888,
+      );
+
+      await _camera!.initialize();
+      await _camera!.startImageStream(_onCameraImage);
+      debugPrint('✅ Camera stream started');
+    } catch (e) {
+      _streamUsers = (_streamUsers - 1).clamp(0, 1 << 30);
+      debugPrint('❌ Camera start error: $e');
+      rethrow;
+    }
+  }
+
+  void _onCameraImage(CameraImage cameraImage) {
+    if (!_isInitialized) return;
+    _detector.lineMode = lineMode;
+    _detector.processFrame(
+      cameraImage,
+      activeLabels: _activeFilters,
+      rotation: _computeFrameRotation(),
+    );
+  }
+
+  /// Rotation the tensor pipeline must apply so the model sees an upright image.
+  ///
+  /// Back cameras are usually mounted at sensorOrientation 90°. In landscape the
+  /// device has rotated 90° too, so the net correction is 0°. Mounted upside
+  /// down, the net correction is sensorOrientation + 180.
+  int _computeFrameRotation() {
+    final sensorOrientation = _camera?.description.sensorOrientation ?? 90;
+    final view = WidgetsBinding.instance.platformDispatcher.views.firstOrNull;
+    final physicalSize = view?.physicalSize ?? const Size(1080, 1920);
+    final isLandscape = physicalSize.width > physicalSize.height;
+    int deviceRotation = 0;
+    if (isLandscape) {
+      deviceRotation = 90;
+    } else if (upsideDown) {
+      deviceRotation = -180;
+    }
+    return (sensorOrientation - deviceRotation + 360) % 360;
+  }
+
+  /// Releases one stream user. The camera is only disposed when nobody needs it.
+  Future<void> stopStream({bool force = false}) async {
+    _streamUsers = (_streamUsers - 1).clamp(0, 1 << 30);
+    if (_streamUsers > 0 && !force) return;
+    _streamUsers = 0;
+
+    _lineSub?.cancel();
+    _lineSub = null;
+    _detectionSub?.cancel();
+    _detectionSub = null;
+    _prefSubscription?.cancel();
+    _prefSubscription = null;
+    _settingsSubscription?.cancel();
+    _settingsSubscription = null;
+
+    final cam = _camera;
+    _camera = null;
+    if (cam != null) {
+      try {
+        if (cam.value.isStreamingImages) {
+          await cam.stopImageStream();
+        }
+        await cam.dispose();
+      } catch (e) {
+        debugPrint('❌ Camera stop error: $e');
+      }
+    }
+    _detector.stop();
+    _lastDetections = [];
+    _trackedObject = null;
+    _lineDetected = false;
+    _isInitialized = false;
+  }
+
+  void dispose() {
+    stopStream(force: true);
+    _resultsController.close();
+  }
+}
