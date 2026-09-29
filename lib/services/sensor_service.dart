@@ -21,6 +21,42 @@ class SensorMath {
     return heading;
   }
 
+  /// Tilt-compensated compass heading (0..360, 0 = magnetic north) of the
+  /// direction the robot faces, from gravity (accelerometer, device frame)
+  /// and the magnetometer. A phone lying flat faces its top edge (+Y); a
+  /// phone standing upright — the usual robot mount, camera forward — faces
+  /// where its back camera looks (−Z). [headingDeg] only handled the flat
+  /// case and read an upright phone's heading as nonsense.
+  static double facingHeadingDeg(
+      double ax, double ay, double az, double mx, double my, double mz) {
+    // East = field × gravity, North = gravity × East (as in Android's
+    // SensorManager.getRotationMatrix).
+    double hx = my * az - mz * ay, hy = mz * ax - mx * az, hz = mx * ay - my * ax;
+    final hn = math.sqrt(hx * hx + hy * hy + hz * hz);
+    final an = math.sqrt(ax * ax + ay * ay + az * az);
+    if (hn < 1e-6 || an < 1e-6) return headingDeg(mx, my); // free fall / no field
+    hx /= hn;
+    hy /= hn;
+    hz /= hn;
+    final ux = ax / an, uy = ay / an, uz = az / an;
+    final ny = uz * hx - ux * hz, nz = ux * hy - uy * hx;
+    final flat = uz.abs() > 0.7071; // within 45° of lying flat
+    final east = flat ? hy : -hz;
+    final north = flat ? ny : -nz;
+    double deg = math.atan2(east, north) * 180 / math.pi;
+    if (deg < 0) deg += 360;
+    return deg;
+  }
+
+  /// Rotation rate about the vertical (gravity) axis, whatever way the phone
+  /// is mounted. Counter-clockwise seen from above is positive.
+  static double yawRateRadS(
+      double gx, double gy, double gz, double ax, double ay, double az) {
+    final an = math.sqrt(ax * ax + ay * ay + az * az);
+    if (an < 1e-6) return gz;
+    return (gx * ax + gy * ay + gz * az) / an;
+  }
+
   /// Signed shortest angular difference a - b in (-180, 180].
   static double angleDiff(double a, double b) => ((a - b + 540) % 360) - 180;
 
@@ -41,9 +77,24 @@ class SensorService {
   /// Yaw rate above this (rad/s) counts as "Phone Spinning".
   static const double rotatingThresholdRadS = 1.0;
 
-  // 20 ms sampling. The platform default ("normal", ~200 ms on Android) makes
-  // tilt steering and shake detection feel laggy.
-  static const Duration _samplingPeriod = SensorInterval.gameInterval;
+  // 20 ms sampling while a program runs: the platform default ("normal",
+  // ~200 ms on Android) makes tilt steering and shake detection feel laggy.
+  // While idle the UI rate (~66 ms) is plenty and saves battery.
+  static const Duration _programRate = SensorInterval.gameInterval;
+  static const Duration _idleRate = SensorInterval.uiInterval;
+  Duration _samplingPeriod = _idleRate;
+
+  /// Switches between program-rate (true) and idle-rate sampling.
+  void setHighRate(bool high) {
+    final period = high ? _programRate : _idleRate;
+    if (period == _samplingPeriod) return;
+    _samplingPeriod = period;
+    if (isListening) {
+      // sensors_plus fixes the rate per subscription: re-subscribe.
+      stopListening();
+      startListening();
+    }
+  }
 
   // ── Accelerometer (gravity removed) ───────────────────────────────────────
   final StreamController<UserAccelerometerEvent> _filteredAccelController =
@@ -93,14 +144,22 @@ class SensorService {
   bool get isShaking =>
       SensorMath.shakeMagnitude(_lastX, _lastY, _lastZ) > shakeThreshold;
 
-  /// Gyroscope Z-axis rotation rate (yaw) in deg/s. Positive = clockwise.
-  double get rotationRateDegS => _gyroZ * 180 / math.pi;
+  double get _yawRadS =>
+      SensorMath.yawRateRadS(_gyroX, _gyroY, _gyroZ, _gravX, _gravY, _gravZ);
 
-  /// True when the device is rotating quickly (≈ 57 deg/s).
-  bool get isRotating => _gyroZ.abs() > rotatingThresholdRadS;
+  /// Turning rate about the vertical axis (yaw) in deg/s, for a phone lying
+  /// flat or standing upright. Positive = counter-clockwise seen from above
+  /// (turning left).
+  double get rotationRateDegS => _yawRadS * 180 / math.pi;
 
-  /// Compass heading 0-360° (0 = North, 90 = East). Requires magnetometer.
-  double get compassHeading => SensorMath.headingDeg(_magX, _magY);
+  /// True when the device is turning quickly (≈ 57 deg/s).
+  bool get isRotating => _yawRadS.abs() > rotatingThresholdRadS;
+
+  /// Compass heading 0-360° (0 = North, 90 = East) of the direction the robot
+  /// faces: the top edge of a flat phone, or the back camera of an upright
+  /// one. Tilt-compensated. Requires a magnetometer.
+  double get compassHeading =>
+      SensorMath.facingHeadingDeg(_gravX, _gravY, _gravZ, _magX, _magY, _magZ);
 
   /// True when compass heading is within ±22.5° of [targetDegrees].
   bool isFacing(double targetDegrees) =>

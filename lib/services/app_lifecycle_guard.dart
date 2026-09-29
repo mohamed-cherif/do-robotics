@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import '../logic/block_script_runner.dart';
 import '../logic/python_script_runner.dart';
 import 'platform_service.dart';
+import 'sensor_service.dart';
 
 /// App-wide safety net for running programs.
 ///
@@ -11,6 +12,7 @@ import 'platform_service.dart';
 ///   foreground, so a screen timeout used to leave the robot driving on the
 ///   last (frozen) camera result while heartbeats kept the firmware watchdog
 ///   happy.
+/// * Samples the IMU at game rate only while a program runs.
 /// * If the app still goes to the background (home button, incoming call,
 ///   user locks the phone), every program is stopped, which also sends
 ///   stop-all to the robot.
@@ -38,6 +40,7 @@ class AppLifecycleGuard with WidgetsBindingObserver {
     if (running == _screenKeptOn) return;
     _screenKeptOn = running;
     PlatformService.keepScreenOn(running);
+    SensorService().setHighRate(running);
   }
 
   @override

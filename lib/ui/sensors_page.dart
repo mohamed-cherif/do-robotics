@@ -101,7 +101,7 @@ class _SensorsPageState extends State<SensorsPage> {
             color: Colors.blue,
             onTap: () => Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const VisionPage())),
-            preview: _StatusBadge(label: "TFLite Active", color: Colors.blue),
+            preview: _StatusBadge(label: "Tap to test", color: Colors.blue),
           ),
 
           // ── Microphone ───────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ class _SensorsPageState extends State<SensorsPage> {
                   const SizedBox(width: 6),
                   _Chip(
                     label: "TILT",
-                    active: _sensors.tiltX.abs() > 20 || _sensors.tiltY.abs() > 20,
+                    active: _sensors.isTilted,
                     color: Colors.deepPurple,
                   ),
                 ]),

@@ -33,9 +33,10 @@ class _AccelerometerPageState extends State<AccelerometerPage> {
         _x = e.x; _y = e.y; _z = e.z;
         _pitch = _sensors.tiltX;
         _roll  = _sensors.tiltY;
-        final mag = (e.x.abs() + e.y.abs() + e.z.abs()) / 3;
-        _isShaking = mag > 5.0;
-        _isTilted  = e.y.abs() > 3.0;
+        // Same definitions the blocks use (SensorService), so what kids see
+        // here is exactly what "Phone Shaking" / "Phone Tilted" will do.
+        _isShaking = _sensors.isShaking;
+        _isTilted  = _sensors.isTilted;
         _xHistory[_historyIndex % 60] = e.x;
         _yHistory[_historyIndex % 60] = e.y;
         _historyIndex++;
@@ -145,7 +146,7 @@ class _AccelerometerPageState extends State<AccelerometerPage> {
                 _BlockOutput(
                   emoji: "📳",
                   label: "Phone Shaking",
-                  description: "Triggers when total acceleration > 5 m/s²",
+                  description: "Triggers when shaken harder than 5 m/s² (gravity removed)",
                   active: _isShaking,
                   color: Colors.purple,
                 ),
@@ -153,7 +154,7 @@ class _AccelerometerPageState extends State<AccelerometerPage> {
                 _BlockOutput(
                   emoji: "📐",
                   label: "Phone Tilted",
-                  description: "Triggers when Y-axis > 3 m/s²",
+                  description: "Triggers when tilted more than 25° in any direction",
                   active: _isTilted,
                   color: Colors.deepPurple,
                 ),

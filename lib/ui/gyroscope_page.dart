@@ -41,9 +41,11 @@ class _GyroscopePageState extends State<GyroscopePage>
         _x = e.x * 180 / math.pi;
         _y = e.y * 180 / math.pi;
         _z = e.z * 180 / math.pi;
-        _rateDegS = _z;
-        _isRotating = e.z.abs() > 1.0;
-        _dialAngle += e.z * 0.04; // integrate for visual
+        // Same yaw the "Rotation Rate" / "Phone Spinning" blocks use: turning
+        // about the vertical axis, for a flat or an upright phone.
+        _rateDegS = _sensors.rotationRateDegS;
+        _isRotating = _sensors.isRotating;
+        _dialAngle += _rateDegS * math.pi / 180 * 0.04; // integrate for visual
         _zHistory[_historyIndex % 80] = _z;
         _historyIndex++;
       });
@@ -141,7 +143,7 @@ class _GyroscopePageState extends State<GyroscopePage>
               _BlockOutput(
                 emoji: "🔃",
                 label: "Rotation Rate°/s",
-                description: "Numeric: ${_rateDegS.toStringAsFixed(1)}°/s  (positive = clockwise)",
+                description: "Numeric: ${_rateDegS.toStringAsFixed(1)}°/s  (positive = turning left)",
                 active: true,
                 color: Colors.teal,
               ),

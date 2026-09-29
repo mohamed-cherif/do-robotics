@@ -27,6 +27,10 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   int _selectedIndex = 0;
   late AnimationController _animController;
   StreamSubscription<RobotConnectionState>? _connectionSub;
+  late final Stream<(bool, bool)> _shakeTiltStream = _sensorService
+      .typeFilteredAccelStream
+      .map((_) => (_sensorService.isShaking, _sensorService.isTilted))
+      .distinct();
   RobotConnectionState _lastConnectionState = RobotConnectionState.disconnected;
 
   @override
@@ -197,10 +201,12 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
       backgroundColor: const Color(0xFFF5F7FA),
       body: IndexedStack(
         index: _selectedIndex,
+        // IndexedStack keeps hidden tabs alive; TickerMode pauses their
+        // animations (the header's particle animation ran forever).
         children: [
-          _buildHomePage(),
-          const LogicPage(),
-          const PythonPage(),
+          TickerMode(enabled: _selectedIndex == 0, child: _buildHomePage()),
+          TickerMode(enabled: _selectedIndex == 1, child: const LogicPage()),
+          TickerMode(enabled: _selectedIndex == 2, child: const PythonPage()),
         ],
       ),
       bottomNavigationBar: Container(
@@ -722,8 +728,9 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             ),
           ),
         ),
-        StreamBuilder(
-          stream: _sensorService.typeFilteredAccelStream,
+        StreamBuilder<(bool, bool)>(
+          // Rebuild only when shake/tilt actually change, not at 50 Hz.
+          stream: _shakeTiltStream,
           builder: (context, snapshot) {
             // Both use the gravity-aware service math (tilt cannot be read
             // from the gravity-removed accelerometer).
