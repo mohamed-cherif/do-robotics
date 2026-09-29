@@ -48,3 +48,41 @@ jobs:
       - run: flutter build apk --release --split-per-abi
       - name: APK sizes
         run: ls -l build/app/outputs/flutter-apk/*.apk
+
+  firmware-tests:
+    # The sketches, unchanged, against host stand-ins for the Arduino APIs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash arduino/test/run_tests.sh
+
+  firmware-build:
+    # Versions are the ones the sketches were last verified with.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sketch: receiver
+            fqbn: esp32:esp32:esp32:PartitionScheme=huge_app
+            core: esp32:esp32@3.3.12
+            lib: ESP32Servo@3.2.1
+          - sketch: receiver_uno
+            fqbn: arduino:avr:uno
+            core: arduino:avr@1.8.8
+            lib: Servo@1.3.0
+          - sketch: receiver_mega
+            fqbn: arduino:avr:mega:cpu=atmega2560
+            core: arduino:avr@1.8.8
+            lib: Servo@1.3.0
+    env:
+      ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - run: arduino-cli core update-index
+      - run: arduino-cli core install ${{ matrix.core }}
+      - run: arduino-cli lib install ${{ matrix.lib }}
+      - run: arduino-cli compile --fqbn ${{ matrix.fqbn }} --warnings all arduino/${{ matrix.sketch }}
