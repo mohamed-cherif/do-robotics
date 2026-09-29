@@ -963,6 +963,8 @@ class _PythonPageState extends State<PythonPage> {
 
   Widget _buildHeader() {
     final isRunning = _state == ExecutionState.running;
+    // On narrow phones (360 dp) the full header overflowed by ~50 px.
+    final narrow = MediaQuery.sizeOf(context).width < 420;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
@@ -977,15 +979,17 @@ class _PythonPageState extends State<PythonPage> {
       ),
       child: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [_kIndigo, _kViolet]),
-              borderRadius: BorderRadius.circular(10),
+          if (!narrow) ...[
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [_kIndigo, _kViolet]),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.code, color: Colors.white, size: 20),
             ),
-            child: const Icon(Icons.code, color: Colors.white, size: 20),
-          ),
-          const SizedBox(width: 12),
+            const SizedBox(width: 12),
+          ],
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1014,6 +1018,9 @@ class _PythonPageState extends State<PythonPage> {
               ],
             ),
           ),
+          if (narrow)
+            _headerIcon(Icons.bolt, 'Examples', _showExamplesSheet)
+          else
           ActionChip(
             avatar: const Icon(Icons.bolt, size: 16, color: _kIndigo),
             label: const Text('Examples'),
@@ -1025,14 +1032,18 @@ class _PythonPageState extends State<PythonPage> {
           ),
           const SizedBox(width: 2),
           _headerIcon(Icons.check_circle_outline, 'Check syntax', _check),
-          _headerIcon(Icons.save_outlined, 'Save Program', _showSaveDialog),
-          _headerIcon(Icons.folder_open_outlined, 'Load Program', _showLoadDialog),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, size: 20),
             tooltip: 'More options',
             padding: EdgeInsets.zero,
             onSelected: (value) {
               switch (value) {
+                case 'save':
+                  _showSaveDialog();
+                  break;
+                case 'load':
+                  _showLoadDialog();
+                  break;
                 case 'api':
                   _showApiReference();
                   break;
@@ -1042,6 +1053,24 @@ class _PythonPageState extends State<PythonPage> {
               }
             },
             itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'save',
+                child: ListTile(
+                  leading: Icon(Icons.save_outlined),
+                  title: Text('Save Program'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'load',
+                child: ListTile(
+                  leading: Icon(Icons.folder_open_outlined),
+                  title: Text('Load Program'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
               PopupMenuItem(
                 value: 'api',
                 child: ListTile(
