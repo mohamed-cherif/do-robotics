@@ -49,6 +49,9 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
   List<BlockDefinition> _actuatorBlocks = [];
 
   // Sort roots by Y position to determine execution order linearly
+  /// Roots in the order they were handed to the runner (for highlighting).
+  List<BlockInstance> _runningRoots = const [];
+
   List<BlockInstance> get sortedRoots {
     final list = List<BlockInstance>.from(_script);
     list.sort((a, b) => a.position.dy.compareTo(b.position.dy));
@@ -1102,7 +1105,10 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
           ],
         ),
       ),
-      floatingActionButton: _script.isNotEmpty ? _buildPlayButton() : null,
+      // Keep STOP reachable while running, even if the canvas was cleared.
+      floatingActionButton: _script.isNotEmpty || _executionState == ExecutionState.running
+          ? _buildPlayButton()
+          : null,
     );
   }
 
@@ -1345,6 +1351,9 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
 
     return Draggable<BlockInstance>(
       data: instance,
+      // Blocks are dragged down onto the canvas; horizontal swipes scroll
+      // the palette instead of picking up a block.
+      affinity: Axis.vertical,
       feedback: Material(
         color: Colors.transparent,
         child: Transform.scale(scale: 1.1, child: feedbackWidget),
@@ -1499,7 +1508,11 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
      return StatementBlockWidget(
        block: block,
        isPreview: isPreview,
-       isExecuting: _script.indexOf(block) == _executingBlockIndex,
+       // The runner reports an index into the list it was given (roots
+       // sorted top-to-bottom at RUN time), not into _script.
+       isExecuting: _executingBlockIndex >= 0 &&
+           _executingBlockIndex < _runningRoots.length &&
+           identical(_runningRoots[_executingBlockIndex], block),
        onBlockDragStarted: isPreview ? null : () => setState(() => _isDraggingBlock = true),
        onBlockDragEnd: isPreview ? null : () => setState(() => _isDraggingBlock = false),
        onInputChanged: (fieldId, value) {
@@ -1519,7 +1532,8 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
           _runner.stop();
         } else {
           // Flatten the script from roots (sorted by Y)
-          _runner.loadScript(sortedRoots);
+          _runningRoots = sortedRoots;
+          _runner.loadScript(_runningRoots);
           _runner.play();
         }
       },

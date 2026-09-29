@@ -100,7 +100,9 @@ class _StatementBlockWidgetState extends State<StatementBlockWidget> {
               else
                 // Drop zone for next block
                 DragTarget<BlockInstance>(
-                  onWillAcceptWithDetails: (details) => details.data.definition.shape == BlockShape.statement,
+                  onWillAcceptWithDetails: (details) =>
+                      details.data.definition.shape == BlockShape.statement &&
+                      !details.data.containsInstance(widget.block),
                   onAcceptWithDetails: (details) {
                     // Remove from roots if it was a root
                     LogicPage.of(context)?.removeRoot(details.data);
@@ -255,7 +257,8 @@ class _StatementBlockWidgetState extends State<StatementBlockWidget> {
         return DragTarget<BlockInstance>(
           hitTestBehavior: HitTestBehavior.opaque,
           onWillAcceptWithDetails: (details) {
-            return details.data.definition.shape == input.acceptedBlockShape;
+            return details.data.definition.shape == input.acceptedBlockShape &&
+                !details.data.containsInstance(widget.block);
           },
           onAcceptWithDetails: (details) {
             LogicPage.of(context)?.removeRoot(details.data);
@@ -365,6 +368,7 @@ class _StatementBlockWidgetState extends State<StatementBlockWidget> {
               DragTarget<BlockInstance>(
                 hitTestBehavior: HitTestBehavior.opaque,
                 onWillAcceptWithDetails: (details) {
+                  if (details.data.containsInstance(widget.block)) return false;
                   return input.acceptedBlockShape == null ||
                       details.data.definition.shape == input.acceptedBlockShape;
                 },

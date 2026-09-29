@@ -24,7 +24,9 @@ class _VisionPageState extends State<VisionPage> {
 
   Future<void> _startVision() async {
     try {
-      await _visionService.initialize();
+      // startStream() registers this page as a camera user synchronously,
+      // so dispose()'s stopStream() always balances it — even when the user
+      // leaves while the camera and model are still loading.
       await _visionService.startStream();
       if (mounted) {
         setState(() {
@@ -45,9 +47,9 @@ class _VisionPageState extends State<VisionPage> {
 
   @override
   void dispose() {
-    // Note: We might NOT want to dispose the service entirely if we want to keep it warm,
-    // but for now, let's stop the stream to save battery.
-    _visionService.stopStream(); 
+    // Release this page's camera use; the camera stays on if a running
+    // program still needs it.
+    _visionService.stopStream();
     super.dispose();
   }
 
@@ -131,7 +133,10 @@ class _VisionPageState extends State<VisionPage> {
                 builder: (context, snapshot) {
                   var objects = snapshot.data ?? [];
                   
-                  return Stack(
+                  // The overlay is display-only: let taps reach the preview's
+                  // GestureDetector underneath (tap-to-lock).
+                  return IgnorePointer(
+                    child: Stack(
                     fit: StackFit.expand,
                     children: [
                        CustomPaint(
@@ -163,6 +168,7 @@ class _VisionPageState extends State<VisionPage> {
                           ),
                         )
                     ],
+                  ),
                   );
                 },
               );

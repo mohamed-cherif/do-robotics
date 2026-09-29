@@ -152,7 +152,8 @@ class _BooleanBlockWidgetState extends State<BooleanBlockWidget> {
         return DragTarget<BlockInstance>(
           hitTestBehavior: HitTestBehavior.opaque,
           onWillAcceptWithDetails: (details) {
-            return details.data.definition.shape == input.acceptedBlockShape;
+            return details.data.definition.shape == input.acceptedBlockShape &&
+                !details.data.containsInstance(widget.block);
           },
           onAcceptWithDetails: (details) {
             LogicPage.of(context)?.removeRoot(details.data);
@@ -210,7 +211,9 @@ class _BooleanBlockWidgetState extends State<BooleanBlockWidget> {
               )
             : DragTarget<BlockInstance>(
                 hitTestBehavior: HitTestBehavior.opaque,
-                onWillAcceptWithDetails: (details) => details.data.definition.shape == acceptedShape,
+                onWillAcceptWithDetails: (details) =>
+                    details.data.definition.shape == acceptedShape &&
+                    !details.data.containsInstance(widget.block),
                 onAcceptWithDetails: (details) {
                   LogicPage.of(context)?.removeRoot(details.data);
                   setState(() {

@@ -188,9 +188,9 @@ class _NeuralCoreHeaderState extends State<NeuralCoreHeader> with SingleTickerPr
           ),
           
           
-          // Connect Button Overlay
-          if (!widget.isConnected)
-            Positioned.fill(
+          // Tap anywhere on the header to open the connection menu (switch
+          // transport, WiFi setup, disconnect) — also while connected.
+          Positioned.fill(
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(

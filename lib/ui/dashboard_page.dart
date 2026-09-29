@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/connectivity/connectivity_manager.dart';
 import '../services/connectivity/robot_connection.dart';
@@ -25,6 +26,8 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   final SensorService _sensorService = SensorService();
   int _selectedIndex = 0;
   late AnimationController _animController;
+  StreamSubscription<RobotConnectionState>? _connectionSub;
+  RobotConnectionState _lastConnectionState = RobotConnectionState.disconnected;
 
   @override
   void initState() {
@@ -35,6 +38,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     );
     _animController.forward();
     
+    _connectionSub = _connectivity.stateStream.listen(_onConnectionState);
     // Auto-connect with the last used transport (Bluetooth by default).
     _connectivity.connect();
     _sensorService.startListening();
@@ -53,15 +57,44 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
 
   @override
   void dispose() {
+    _connectionSub?.cancel();
     PythonBus.requestedTab.removeListener(_onTabRequested);
     _animController.dispose();
     _sensorService.stopListening();
     super.dispose();
   }
 
-  Future<void> _switchAndConnect(ConnectionType type) async {
+  /// Switches transport (if needed) and connects. [reconnect] drops an
+  /// existing link of the same type first — needed when the WiFi address
+  /// changed, otherwise the app silently stayed on the old host.
+  Future<void> _switchAndConnect(ConnectionType type, {bool reconnect = false}) async {
+    if (reconnect &&
+        _connectivity.activeType == type &&
+        _connectivity.state != RobotConnectionState.disconnected) {
+      await _connectivity.disconnect();
+    }
     await _connectivity.setType(type);
     await _connectivity.connect();
+  }
+
+  /// Tells the user when a connection attempt ends without a link instead of
+  /// failing silently (robot off, Bluetooth off, permission denied...).
+  void _onConnectionState(RobotConnectionState s) {
+    final wasConnecting = _lastConnectionState == RobotConnectionState.connecting;
+    _lastConnectionState = s;
+    if (!mounted || !wasConnecting || s != RobotConnectionState.disconnected) return;
+    final hint = switch (_connectivity.activeType) {
+      ConnectionType.bluetooth =>
+        'Is the robot powered and nearby, and is Bluetooth on? Tap the header to retry.',
+      ConnectionType.serial =>
+        'Plug the board in with a USB-OTG cable and accept the USB permission prompt.',
+      ConnectionType.wifi =>
+        'Is the phone on the same WiFi as the robot (or on the ESP32_Robot hotspot)?',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text("Couldn't connect over ${_connectivity.activeType.displayName}. $hint"),
+      duration: const Duration(seconds: 5),
+    ));
   }
 
   Future<void> _promptWifiHost() async {
@@ -72,7 +105,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     );
     if (host == null || host.isEmpty) return;
     await _connectivity.setWifiHost(host);
-    await _switchAndConnect(ConnectionType.wifi);
+    await _switchAndConnect(ConnectionType.wifi, reconnect: true);
   }
 
   Future<void> _showRobotWifiSetup() async {
@@ -82,7 +115,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     );
     if (ip != null && mounted) {
       // The user chose to switch to the robot's new WiFi address.
-      await _switchAndConnect(ConnectionType.wifi);
+      await _switchAndConnect(ConnectionType.wifi, reconnect: true);
     }
   }
 

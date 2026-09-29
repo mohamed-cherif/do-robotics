@@ -122,4 +122,31 @@ void main() {
       expect(Parser.parse(code), isNotNull);
     });
   });
+
+  group('BlockInstance.containsInstance (editor cycle guard)', () {
+    test('finds the block itself, nested blocks and the next chain', () {
+      final inner = BlockInstance(instanceId: 'w', definition: def('logic_wait'));
+      final ifBlock = BlockInstance(
+        instanceId: 'if',
+        definition: def('logic_if'),
+        nestedBlocks: {'then': inner},
+      );
+      final after = BlockInstance(instanceId: 'after', definition: def('logic_wait'));
+      final loop = BlockInstance(
+        instanceId: 'loop',
+        definition: def('logic_while'),
+        nestedBlocks: {'do': ifBlock},
+        nextBlock: after,
+      );
+      // Dropping `loop` into any of these would put it inside itself.
+      expect(loop.containsInstance(loop), isTrue);
+      expect(loop.containsInstance(ifBlock), isTrue);
+      expect(loop.containsInstance(inner), isTrue);
+      expect(loop.containsInstance(after), isTrue);
+      // ...but a child may be moved out into an unrelated block.
+      final other = BlockInstance(instanceId: 'other', definition: def('logic_if'));
+      expect(loop.containsInstance(other), isFalse);
+      expect(inner.containsInstance(loop), isFalse);
+    });
+  });
 }

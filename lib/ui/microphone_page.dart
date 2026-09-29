@@ -1,6 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:permission_handler/permission_handler.dart';
+import '../services/voice_service.dart';
 
 class MicrophonePage extends StatefulWidget {
   const MicrophonePage({super.key});
@@ -10,13 +12,18 @@ class MicrophonePage extends StatefulWidget {
 }
 
 class _MicrophonePageState extends State<MicrophonePage> with SingleTickerProviderStateMixin {
-  final stt.SpeechToText _speech = stt.SpeechToText();
+  // Uses the shared VoiceService: the speech plugin is a process-wide
+  // singleton, and driving it directly from this page used to steal it from
+  // (or break the auto-restart of) a running voice program.
+  final VoiceService _voice = VoiceService();
   bool _isListening = false;
-  bool _wantsToListen = true;
+  bool _holdingMic = false;
   String _lastWords = '';
 
-  double _noiseDb = 0.0;
-  
+  double _noiseDb = 0.0; // 0..100 display level
+  StreamSubscription<String>? _wordsSub;
+  StreamSubscription<double>? _levelSub;
+
   late AnimationController _pulseController;
 
   @override
@@ -26,129 +33,51 @@ class _MicrophonePageState extends State<MicrophonePage> with SingleTickerProvid
        vsync: this,
        duration: const Duration(seconds: 1),
     )..repeat(reverse: true);
-    
-    _initAudio();
-  }
 
-  Future<void> _initAudio() async {
-    // Request permissions first
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.microphone,
-      Permission.speech,
-    ].request();
-
-    if (statuses[Permission.microphone] != PermissionStatus.granted) {
-      if (mounted) {
-        setState(() {
-          _lastWords = "Microphone permission denied. Please enable it in settings.";
-        });
-      }
-      // Note: We continue anyway, as noise meter might still work or speech might have its own fallback, 
-      // but it's likely they will fail. Let's just return if microphone is denied.
-      return;
-    }
-
-    // Removed Noise Meter entirely because it locks the microphone stream and breaks Speech To Text on Android.
-    // Instead we will use speech_to_text's onSoundLevelChange.
-
-    // Speech to Text
-    try {
-      bool available = await _speech.initialize(
-        onStatus: (status) {
-          if (mounted) {
-             setState(() {
-                _isListening = (status == 'listening');
-             });
-             if ((status == 'done' || status == 'notListening') && _wantsToListen) {
-                // 300 ms lets isListening clear so the restart guard doesn't block it.
-                Future.delayed(const Duration(milliseconds: 300), () {
-                   if (mounted && _wantsToListen) _startListening();
-                });
-             }
-          }
-        },
-        onError: (errorNotification) {
-          debugPrint("Speech error: ${errorNotification.errorMsg}");
-          if (errorNotification.errorMsg != 'error_speech_timeout') {
-            if (mounted) {
-               setState(() {
-                  _lastWords = "Error: ${errorNotification.errorMsg}";
-               });
-            }
-          }
-        }
-      );
-      
-      if (mounted) {
-        if (available) {
-          _startListening();
-        } else {
-          setState(() {
-            _lastWords = "Speech Recognition not available on this device.";
-          });
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _lastWords = "Init Ex: $e";
-        });
-      }
-    }
-  }
-
-  void _startListening() {
-    _wantsToListen = true;
-    if (_speech.isListening) return; // Prevent double listen
-    try {
-      _speech.listen(
-        onResult: (result) {
-          if (mounted) {
-            setState(() {
-              _lastWords = result.recognizedWords;
-            });
-          }
-        },
-        onSoundLevelChange: (level) {
-          if (mounted) {
-            setState(() {
-              // Android onSoundLevelChange returns EXTRA_RMS_DB: range roughly -2..10.
-              // Map that full range to 0..100 for the display bar.
-              _noiseDb = ((level + 2) / 12 * 100).clamp(0.0, 100.0);
-            });
-          }
-        },
-        listenOptions: stt.SpeechListenOptions(
-          cancelOnError: false, // Don't kill the session on mic errors
-          listenMode: stt.ListenMode.dictation,
-          partialResults: true,
-        ),
-      );
-      setState(() {
-         _isListening = true;
-         if (_lastWords.isEmpty || _lastWords.startsWith("Error")) _lastWords = "Listening now...";
-      });
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _lastWords = "Listen Ex: $e";
-          _isListening = false;
-        });
-      }
-    }
-  }
-
-  void _stopListening() {
-    _wantsToListen = false;
-    _speech.stop();
-    setState(() {
-       _isListening = false;
+    _wordsSub = _voice.wordsStream.listen((words) {
+      if (words.isNotEmpty && mounted) setState(() => _lastWords = words);
     });
+    _levelSub = _voice.levelStream.listen((level) {
+      if (mounted) setState(() => _noiseDb = level);
+    });
+    _startListening();
+  }
+
+  Future<void> _startListening() async {
+    if (_holdingMic) return;
+    _holdingMic = true; // released in _stopListening / dispose
+    final ok = await _voice.startListening();
+    if (!mounted) return;
+    setState(() {
+      _isListening = ok;
+      _lastWords = ok ? "Listening now..." : "Microphone unavailable.";
+    });
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text(
+            "Speech recognition couldn't start. Allow the microphone for this app, "
+            "and check that a speech service (e.g. Google) is installed."),
+        action: SnackBarAction(label: 'Settings', onPressed: openAppSettings),
+        duration: const Duration(seconds: 6),
+      ));
+    }
+  }
+
+  Future<void> _stopListening() async {
+    if (!_holdingMic) return;
+    _holdingMic = false;
+    await _voice.stopListening();
+    if (mounted) setState(() => _isListening = false);
   }
 
   @override
   void dispose() {
-    _speech.stop();
+    _wordsSub?.cancel();
+    _levelSub?.cancel();
+    if (_holdingMic) {
+      _holdingMic = false;
+      _voice.stopListening();
+    }
     _pulseController.dispose();
     super.dispose();
   }
@@ -241,9 +170,10 @@ class _MicrophonePageState extends State<MicrophonePage> with SingleTickerProvid
     // Map 0-100 level to 0.0 - 1.0 progress
     final double normalizedVolume = (_noiseDb / 100).clamp(0.0, 1.0);
     Color progressColor = Colors.green;
-    if (_noiseDb > 85) {
+    // Red = what the "Loud Noise" block treats as loud (VoiceService.isLoud).
+    if (_voice.isLoud) {
        progressColor = Colors.red;
-    } else if (_noiseDb > 65) {
+    } else if (_noiseDb > 45) {
        progressColor = Colors.orange;
     }
 

@@ -95,6 +95,21 @@ class BlockInstance {
     );
   }
 
+  /// True if [other] is this block or sits anywhere below it (nested slots
+  /// or the `nextBlock` chain). Drop targets use it to refuse a drop that
+  /// would put a block inside itself — that created a cycle, which crashed
+  /// the editor (infinite widget recursion) and hung the runner.
+  bool containsInstance(BlockInstance other) {
+    final stack = <BlockInstance>[this];
+    while (stack.isNotEmpty) {
+      final b = stack.removeLast();
+      if (identical(b, other)) return true;
+      stack.addAll(b.nestedBlocks.values.whereType<BlockInstance>());
+      if (b.nextBlock != null) stack.add(b.nextBlock!);
+    }
+    return false;
+  }
+
   // Execute this block (to be used by interpreter)
   dynamic getValue() {
     // For expression/boolean blocks, evaluate and return

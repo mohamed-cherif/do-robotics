@@ -9,7 +9,13 @@ import 'package:speech_to_text/speech_to_text.dart';
 import '../utils/execution_logger.dart';
 
 /// Speech recognition (continuous dictation with auto-restart), loudness,
-/// and text-to-speech. One instance shared by the block and Python runners.
+/// and text-to-speech. The single owner of the (process-wide) speech
+/// recognizer, shared by the block runner, the Python runner and the
+/// Microphone page.
+///
+/// Listening is reference-counted like the camera: every [startListening]
+/// (even one that returns false) must be balanced by one [stopListening], and
+/// the mic only really stops when the last user releases it.
 class VoiceService {
   static final VoiceService _instance = VoiceService._internal();
   factory VoiceService() => _instance;
@@ -29,6 +35,9 @@ class VoiceService {
   /// Consecutive recognizer errors, for restart back-off.
   int _errorStreak = 0;
 
+  int _users = 0;
+  Future<bool>? _startFuture;
+
   /// Errors that will not fix themselves by restarting the recognizer.
   static const Set<String> _fatalErrors = {
     'error_permission',
@@ -42,6 +51,9 @@ class VoiceService {
   Stream<String> get wordsStream => _wordsController.stream;
   final StreamController<String> _logController = StreamController<String>.broadcast();
   Stream<String> get logStream => _logController.stream;
+  final StreamController<double> _levelController = StreamController<double>.broadcast();
+  /// Microphone level 0..100 while listening (for meters).
+  Stream<double> get levelStream => _levelController.stream;
 
   String _lastWords = '';
   String get lastWords => _lastWords;
@@ -58,8 +70,13 @@ class VoiceService {
 
   /// Requests the mic permission and starts continuous recognition.
   /// Returns false if unavailable, denied, or stopped while starting.
-  Future<bool> startListening() async {
-    if (_wantListening) return _available;
+  Future<bool> startListening() {
+    _users++;
+    if (_wantListening) return Future.value(_available);
+    return _startFuture ??= _start().whenComplete(() => _startFuture = null);
+  }
+
+  Future<bool> _start() async {
     final session = ++_session;
     if (!await Permission.microphone.request().isGranted) {
       _log("⚠️ Microphone permission denied — allow it in the phone's Settings › Apps");
@@ -68,19 +85,13 @@ class VoiceService {
     if (session != _session) return false;
     try {
       if (!_initialized) {
-        _available = await _speech.initialize(
-          onError: _onError,
-          onStatus: (status) {
-            if (status == 'done' || status == 'notListening') {
-              // Loudness only updates while a session is live; don't leave a
-              // stale "loud" reading between sessions.
-              _isLoud = false;
-              if (_wantListening) _scheduleRestart();
-            }
-          },
-        );
+        _available = await _speech.initialize(onError: _onError, onStatus: _onStatus);
         _initialized = true;
       }
+      // The plugin is a process-wide singleton that keeps the callbacks of
+      // whoever initialized it first; make sure they are ours.
+      _speech.errorListener = _onError;
+      _speech.statusListener = _onStatus;
     } catch (e) {
       _log("Speech Init Error: $e");
       _available = false;
@@ -95,6 +106,15 @@ class VoiceService {
     _log("🎙️ Voice: listening");
     await _listen();
     return true;
+  }
+
+  void _onStatus(String status) {
+    if (status == 'done' || status == 'notListening') {
+      // Loudness only updates while a session is live; don't leave a stale
+      // "loud" reading between sessions.
+      _isLoud = false;
+      if (_wantListening) _scheduleRestart();
+    }
   }
 
   void _onError(SpeechRecognitionError e) {
@@ -135,6 +155,9 @@ class VoiceService {
         onSoundLevelChange: (level) {
           // Android: EXTRA_RMS_DB roughly -2..10; iOS: dBFS -160..0.
           _isLoud = Platform.isAndroid ? level > 5.0 : level > -40.0;
+          _levelController.add(Platform.isAndroid
+              ? ((level + 2) / 12 * 100).clamp(0.0, 100.0)
+              : ((level + 60) / 60 * 100).clamp(0.0, 100.0));
         },
         listenFor: const Duration(seconds: 60),
         pauseFor: const Duration(seconds: 8),
@@ -156,7 +179,10 @@ class VoiceService {
     _wordsController.add('');
   }
 
+  /// Releases one user; the recognizer stops when nobody needs it.
   Future<void> stopListening() async {
+    if (_users > 0) _users--;
+    if (_users > 0) return;
     _session++;
     _wantListening = false;
     _isLoud = false;
