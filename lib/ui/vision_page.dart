@@ -1,5 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/vision_service.dart';
 import '../services/vision_preferences.dart';
 import 'painters/inference_painter.dart';
@@ -15,6 +16,7 @@ class VisionPage extends StatefulWidget {
 class _VisionPageState extends State<VisionPage> {
   final VisionService _visionService = VisionService();
   bool _isReady = false;
+  String? _error;
 
   @override
   void initState() {
@@ -35,13 +37,7 @@ class _VisionPageState extends State<VisionPage> {
         });
       }
     } catch (e) {
-      if (mounted) {
-        showDialog(context: context, builder: (c) => AlertDialog(
-          title: const Text("Initialization Failed"),
-          content: Text("Error: $e\nCheck Camera Permissions."),
-          actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text("OK"))],
-        ));
-      }
+      if (mounted) setState(() => _error = _describeError(e));
     }
   }
 
@@ -59,8 +55,52 @@ class _VisionPageState extends State<VisionPage> {
   
   BoxFit _fit = BoxFit.contain; // Default to contain (Letterboxed) to see full FOV
 
+  /// Plain-language message for the most common start-up failures.
+  static String _describeError(Object e) {
+    final text = e.toString();
+    if (e is CameraException && text.toLowerCase().contains('access')) {
+      return 'The app is not allowed to use the camera. Allow it in Settings, then come back.';
+    }
+    if (text.contains('Vision model failed to load')) {
+      return 'The object-detection model could not be loaded on this phone.\n\n$text';
+    }
+    return 'The camera could not be started.\n\n$text';
+  }
+
+  Widget _buildError(String message) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: const Text('Camera'),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.no_photography, color: Colors.white54, size: 56),
+              const SizedBox(height: 16),
+              Text(message, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: openAppSettings,
+                icon: const Icon(Icons.settings),
+                label: const Text('Open Settings'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final error = _error;
+    if (error != null) return _buildError(error);
     if (!_isReady || _visionService.cameraController == null) {
       return const Scaffold(
         backgroundColor: Colors.black,
@@ -89,13 +129,8 @@ class _VisionPageState extends State<VisionPage> {
               height: previewH,
               child: GestureDetector(
                 onTapDown: (details) {
-                  // Convert tap coordinates to normalized 0..1 space or image space
-                  // detailed.localPosition is within the SizedBox (previewW, previewH)
-                  // TFLite/VisionService detections are usually normalized 0..1 in ObjectDetectorService
-                  // BUT previous code in InferencePainter handles raw bounding boxes or normalized?
-                  // Let's check InferencePainter. Rect is typically normalized [0,1].
-                  // ObjectDetectorService uses SSD MobileNet which outputs normalized coords [0,1].
-                  
+                  // Detections are normalized (0..1) in this preview's
+                  // coordinate space; localPosition is inside the SizedBox.
                   final dx = details.localPosition.dx / previewW;
                   final dy = details.localPosition.dy / previewH;
                   

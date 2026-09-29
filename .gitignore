@@ -52,3 +52,6 @@ analyze_output.txt
 
 # Unpacked copies of downloaded models
 /assets/ml/extracted/
+
+# Model evaluation image cache (COCO images are downloaded, not redistributed)
+/tools/model_eval/cache/
