@@ -15,6 +15,8 @@ class BluetoothStrategy implements RobotConnection {
   Timer? _scanTimeout;
   Timer? _heartbeatTimer;
   bool _userDisconnected = false;
+  bool _disposed = false;
+  bool _reconnectPending = false;
   int _reconnectAttempts = 0;
 
   final StreamController<RobotConnectionState> _stateController =
@@ -40,6 +42,7 @@ class BluetoothStrategy implements RobotConnection {
   Stream<Uint8List> get inbound => _inboundController.stream;
 
   void _updateState(RobotConnectionState state) {
+    if (_disposed) return;
     if (_currentState != state) {
       _currentState = state;
       _stateController.add(state);
@@ -48,7 +51,7 @@ class BluetoothStrategy implements RobotConnection {
 
   @override
   Future<void> connect({String? deviceId}) async {
-    if (_currentState != RobotConnectionState.disconnected) return;
+    if (_currentState != RobotConnectionState.disconnected || _disposed) return;
     _userDisconnected = false;
     _reconnectAttempts = 0;
 
@@ -114,6 +117,13 @@ class BluetoothStrategy implements RobotConnection {
   Future<bool> _connectToDevice(BluetoothDevice device) async {
     try {
       await device.connect(timeout: const Duration(seconds: 15));
+      if (_userDisconnected || _disposed) {
+        // disconnect()/dispose() ran while we were connecting.
+        try {
+          await device.disconnect();
+        } catch (_) {}
+        return false;
+      }
       _connectedDevice = device;
       _lastDevice = device;
 
@@ -157,7 +167,7 @@ class BluetoothStrategy implements RobotConnection {
           await rx.setNotifyValue(true);
           _notifySub?.cancel();
           _notifySub = rx.onValueReceived.listen((bytes) {
-            _inboundController.add(Uint8List.fromList(bytes));
+            if (!_disposed) _inboundController.add(Uint8List.fromList(bytes));
           });
         } catch (e) {
           debugPrint("BLE: could not subscribe to notifications: $e");
@@ -174,6 +184,14 @@ class BluetoothStrategy implements RobotConnection {
       _connectedDevice = null;
       _txCharacteristic = null;
       _rxCharacteristic = null;
+      // A failure after connect() succeeded (e.g. service discovery) would
+      // otherwise leave the link up but unusable. Detach the drop listener
+      // first so this deliberate disconnect doesn't start a reconnect loop.
+      _connectionStateSub?.cancel();
+      _connectionStateSub = null;
+      try {
+        await device.disconnect();
+      } catch (_) {}
       _updateState(RobotConnectionState.disconnected);
       return false;
     }
@@ -181,7 +199,12 @@ class BluetoothStrategy implements RobotConnection {
 
   /// Unexpected link loss: try to get back to the same device a few times.
   void _onDropped() {
+    // One reconnect loop at a time: the connection-state listener and a
+    // failed attempt can both report the same drop.
+    if (_reconnectPending) return;
     _stopHeartbeat();
+    _connectionStateSub?.cancel();
+    _connectionStateSub = null;
     _notifySub?.cancel();
     _notifySub = null;
     _connectedDevice = null;
@@ -199,13 +222,16 @@ class BluetoothStrategy implements RobotConnection {
     _reconnectAttempts++;
     _updateState(RobotConnectionState.connecting);
     debugPrint("BLE: link lost, reconnect attempt $_reconnectAttempts");
+    _reconnectPending = true;
     Future.delayed(const Duration(seconds: 2), () async {
-      if (_userDisconnected) {
+      if (_userDisconnected || _disposed) {
+        _reconnectPending = false;
         _updateState(RobotConnectionState.disconnected);
         return;
       }
       final ok = await _connectToDevice(_lastDevice!);
-      if (!ok && !_userDisconnected) _onDropped();
+      _reconnectPending = false;
+      if (!ok && !_userDisconnected && !_disposed) _onDropped();
     });
   }
 
@@ -269,6 +295,7 @@ class BluetoothStrategy implements RobotConnection {
   @override
   Future<void> dispose() async {
     await disconnect();
+    _disposed = true;
     _stateController.close();
     _inboundController.close();
   }

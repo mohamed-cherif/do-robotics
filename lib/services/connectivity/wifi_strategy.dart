@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:multicast_dns/multicast_dns.dart';
+import '../platform_service.dart';
 import 'robot_connection.dart';
 import 'robot_protocol.dart';
 
@@ -14,6 +15,10 @@ class WifiStrategy implements RobotConnection {
   RobotConnectionState _currentState = RobotConnectionState.disconnected;
   Timer? _heartbeatTimer;
   StreamSubscription? _socketSub;
+  bool _disposed = false;
+  /// Bumped by [disconnect]; a connect still resolving/dialing compares
+  /// against it and closes its socket instead of taking over the link.
+  int _attempt = 0;
 
   /// Default soft-AP address of receiver.ino (WiFi.softAP → 192.168.4.1:4210).
   static const String defaultHost = '192.168.4.1';
@@ -33,13 +38,16 @@ class WifiStrategy implements RobotConnection {
   Stream<Uint8List> get inbound => _inboundController.stream;
 
   void _updateState(RobotConnectionState state) {
-    if (_currentState == state) return;
+    if (_currentState == state || _disposed) return;
     _currentState = state;
     _stateController.add(state);
   }
 
   /// Resolves a `.local` hostname via mDNS. Returns null when not found.
-  static Future<String?> resolveMdns(String host, {Duration timeout = const Duration(seconds: 3)}) async {
+  static Future<String?> resolveMdns(String host, {Duration timeout = const Duration(seconds: 3)}) =>
+      PlatformService.withMulticastLock(() => _resolveMdns(host, timeout));
+
+  static Future<String?> _resolveMdns(String host, Duration timeout) async {
     final client = MDnsClient();
     try {
       await client.start();
@@ -57,7 +65,10 @@ class WifiStrategy implements RobotConnection {
   }
 
   /// Browses for robots advertising `_dorobot._tcp`. Returns "host:port" list.
-  static Future<List<String>> discover({Duration timeout = const Duration(seconds: 3)}) async {
+  static Future<List<String>> discover({Duration timeout = const Duration(seconds: 3)}) =>
+      PlatformService.withMulticastLock(() => _discover(timeout));
+
+  static Future<List<String>> _discover(Duration timeout) async {
     final client = MDnsClient();
     final found = <String>{};
     try {
@@ -86,7 +97,9 @@ class WifiStrategy implements RobotConnection {
   /// [deviceId] may be "host", "host:port", or "robot.local[:port]".
   @override
   Future<void> connect({String? deviceId}) async {
-    if (_currentState != RobotConnectionState.disconnected) return;
+    if (_currentState != RobotConnectionState.disconnected || _disposed) return;
+    final attempt = ++_attempt;
+    bool cancelled() => _disposed || attempt != _attempt;
     _updateState(RobotConnectionState.connecting);
 
     String host = defaultHost;
@@ -99,6 +112,7 @@ class WifiStrategy implements RobotConnection {
 
     if (host.endsWith('.local')) {
       final ip = await resolveMdns(host);
+      if (cancelled()) return;
       if (ip == null) {
         debugPrint("WiFi: could not resolve $host (is the robot on this network?)");
         _updateState(RobotConnectionState.disconnected);
@@ -110,6 +124,12 @@ class WifiStrategy implements RobotConnection {
 
     try {
       final socket = await Socket.connect(host, port, timeout: const Duration(seconds: 5));
+      if (cancelled()) {
+        // disconnect()/dispose() ran while we were dialing: don't leave an
+        // orphan socket holding the robot's only client slot.
+        socket.destroy();
+        return;
+      }
       socket.setOption(SocketOption.tcpNoDelay, true); // latency over throughput
       _socket = socket;
       lastResolved = '$host:$port';
@@ -118,14 +138,16 @@ class WifiStrategy implements RobotConnection {
 
       _socketSub?.cancel();
       _socketSub = socket.listen(
-        (data) => _inboundController.add(Uint8List.fromList(data)),
+        (data) {
+          if (!_disposed) _inboundController.add(Uint8List.fromList(data));
+        },
         onError: (_) => _handleDisconnect(),
         onDone: () => _handleDisconnect(),
         cancelOnError: true,
       );
     } catch (e) {
       debugPrint("WiFi Connection Error ($host:$port): $e");
-      _updateState(RobotConnectionState.disconnected);
+      if (!cancelled()) _updateState(RobotConnectionState.disconnected);
     }
   }
 
@@ -165,11 +187,12 @@ class WifiStrategy implements RobotConnection {
 
   @override
   Future<void> disconnect() async {
+    _attempt++;
     final socket = _socket;
     if (socket != null) {
       try {
-        await socket.flush();
-        await socket.close();
+        await socket.flush().timeout(const Duration(seconds: 1));
+        await socket.close().timeout(const Duration(seconds: 1));
       } catch (_) {}
     }
     _cleanup();
@@ -187,6 +210,7 @@ class WifiStrategy implements RobotConnection {
   @override
   Future<void> dispose() async {
     await disconnect();
+    _disposed = true;
     _stateController.close();
     _inboundController.close();
   }

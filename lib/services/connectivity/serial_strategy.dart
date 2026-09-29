@@ -14,6 +14,8 @@ class SerialStrategy implements RobotConnection {
   Timer? _heartbeatTimer;
   StreamSubscription? _usbEventSub;
   StreamSubscription? _inputSub;
+  bool _disposed = false;
+  int _attempt = 0;
 
   static const int _baudRate = 115200;
 
@@ -25,30 +27,33 @@ class SerialStrategy implements RobotConnection {
   Stream<Uint8List> get inbound => _inboundController.stream;
 
   void _updateState(RobotConnectionState state) {
-    if (_currentState == state) return;
+    if (_currentState == state || _disposed) return;
     _currentState = state;
     _stateController.add(state);
   }
 
   @override
   Future<void> connect({String? deviceId}) async {
-    if (_currentState != RobotConnectionState.disconnected) return;
+    if (_currentState != RobotConnectionState.disconnected || _disposed) return;
+    final attempt = ++_attempt;
+    bool cancelled() => _disposed || attempt != _attempt;
     _updateState(RobotConnectionState.connecting);
 
-    final devices = await UsbSerial.listDevices();
-    if (devices.isEmpty) {
-      debugPrint("USB: no serial devices found");
-      _updateState(RobotConnectionState.disconnected);
-      return;
-    }
-
-    final device = devices.firstWhere(
-      (d) => deviceId != null && (d.deviceName == deviceId || '${d.deviceId}' == deviceId),
-      orElse: () => devices.first,
-    );
-    debugPrint("USB: connecting to ${device.deviceName} (VID:${device.vid} PID:${device.pid})");
-
     try {
+      final devices = await UsbSerial.listDevices();
+      if (cancelled()) return;
+      if (devices.isEmpty) {
+        debugPrint("USB: no serial devices found");
+        _updateState(RobotConnectionState.disconnected);
+        return;
+      }
+
+      final device = devices.firstWhere(
+        (d) => deviceId != null && (d.deviceName == deviceId || '${d.deviceId}' == deviceId),
+        orElse: () => devices.first,
+      );
+      debugPrint("USB: connecting to ${device.deviceName} (VID:${device.vid} PID:${device.pid})");
+
       final port = await device.create();
       if (port == null || !(await port.open())) {
         debugPrint("USB: failed to open port");
@@ -69,6 +74,13 @@ class SerialStrategy implements RobotConnection {
       // Toggling DTR resets AVR boards; give the bootloader time to hand over
       // to the sketch before we start streaming packets at it.
       await Future.delayed(const Duration(milliseconds: 1800));
+      if (cancelled()) {
+        if (identical(_port, port)) _port = null;
+        try {
+          await port.close();
+        } catch (_) {}
+        return;
+      }
 
       _updateState(RobotConnectionState.connected);
       _startHeartbeat();
@@ -76,7 +88,9 @@ class SerialStrategy implements RobotConnection {
 
       _inputSub?.cancel();
       _inputSub = port.inputStream?.listen(
-        (data) => _inboundController.add(data),
+        (data) {
+          if (!_disposed) _inboundController.add(data);
+        },
         onError: (_) => _handleDisconnect(),
         onDone: () => _handleDisconnect(),
         cancelOnError: true,
@@ -84,7 +98,7 @@ class SerialStrategy implements RobotConnection {
     } catch (e) {
       debugPrint("USB Connection Error: $e");
       _port = null;
-      _updateState(RobotConnectionState.disconnected);
+      if (!cancelled()) _updateState(RobotConnectionState.disconnected);
     }
   }
 
@@ -112,7 +126,10 @@ class SerialStrategy implements RobotConnection {
 
   void _handleDisconnect() {
     if (_currentState == RobotConnectionState.disconnected) return;
+    final port = _port;
     _cleanup();
+    // Release the Android USB handle; ignore errors from an unplugged device.
+    port?.close().catchError((_) => false);
     _updateState(RobotConnectionState.disconnected);
   }
 
@@ -128,6 +145,7 @@ class SerialStrategy implements RobotConnection {
 
   @override
   Future<void> disconnect() async {
+    _attempt++;
     final port = _port;
     _cleanup();
     if (port != null) {
@@ -156,6 +174,7 @@ class SerialStrategy implements RobotConnection {
   @override
   Future<void> dispose() async {
     await disconnect();
+    _disposed = true;
     _stateController.close();
     _inboundController.close();
   }
