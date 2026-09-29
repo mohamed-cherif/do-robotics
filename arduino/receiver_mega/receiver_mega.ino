@@ -1,28 +1,18 @@
 #include <Servo.h>
 
 /**
- * DO ROBOTICS - Slave Firmware (Arduino Mega Version)
- * ---------------------------------------------------
- * Compatible with Arduino Mega 2560.
+ * DO ROBOTICS - Slave Firmware (Arduino Mega 2560 Version)
+ * --------------------------------------------------------
+ * Requires: "Arduino AVR Boards" and the built-in Servo library.
  *
- * Key differences from the Uno version:
- *   - 54 digital pins (2-53 usable; 0/1 reserved for Serial)
- *   - PWM available on pins: 2-13, 44, 45, 46
- *   - Up to 48 servos supported by the AVR Servo library on Mega
- *   - Servo array and pin guard updated accordingly
- *
- * Commands
- *   0x00  HEARTBEAT      – no-op, only refreshes the link watchdog
- *                          (the app sends one every 500 ms; no LED pulse)
- *   0x01  DIGITAL_WRITE  – val: 0=LOW, 1=HIGH
- *   0x02  ANALOG_WRITE   – val: 0-255 PWM duty cycle
- *   0x03  PIN_MODE       – val: 0=INPUT, 1=OUTPUT, 2=INPUT_PULLUP
- *   0x04  SERVO_WRITE    – positional servo, val = angle 0-180
- *   0x05  SERVO_WRITE_US – continuous servo, val = (µs - 1300) / 2
- *                          val=0   -> 1300 µs (full reverse)
- *                          val=100 -> 1500 µs (stop)
- *                          val=200 -> 1700 µs (full forward)
- *   0x06  STOP_ALL       – pin/val ignored, runs failsafeStop()
+ * v1.5 - servo pool (the old one-Servo-per-pin array silently used up every
+ *        servo slot, so servos on some pins never moved), pin 13 activity
+ *        blink only while the program isn't using pin 13, analog pins usable
+ *        as digital outputs, clear ERR replies for bad pins / pins without
+ *        PWM / PWM pins taken over by the servo timer, PIN_MODE OUTPUT pins
+ *        included in the failsafe.
+ * v1.4 - 0xAB text-frame parsing (answers ERR\tunsupported), framed WATCHDOG
+ * v1.3 - Link watchdog / failsafe + STOP_ALL command
  *
  * Framing (the parser dispatches on the first byte of every frame)
  *   0xAA  control   [0xAA][CMD][PIN][VAL][CK]           phone -> board
@@ -38,6 +28,30 @@
  *   LEN > 64 are dropped and answered with  ERR\ttoo long.
  *   The watchdog message is also a text frame:  WATCHDOG\tlink lost
  *
+ * Commands
+ *   0x00  HEARTBEAT      – no-op, only refreshes the link watchdog
+ *                          (the app sends one every 500 ms; no LED pulse)
+ *   0x01  DIGITAL_WRITE  – val: 0=LOW, 1=HIGH
+ *   0x02  ANALOG_WRITE   – val: 0-255 PWM duty cycle
+ *   0x03  PIN_MODE       – val: 0=INPUT, 1=OUTPUT, 2=INPUT_PULLUP
+ *   0x04  SERVO_WRITE    – positional servo, val = angle 0-180
+ *   0x05  SERVO_WRITE_US – continuous servo, val = (µs - 1300) / 2
+ *                          val=0   -> 1300 µs (full reverse)
+ *                          val=100 -> 1500 µs (stop)
+ *                          val=200 -> 1700 µs (full forward)
+ *   0x06  STOP_ALL       – pin/val ignored, runs failsafeStop()
+ *
+ * Pins
+ *   Digital 2-53 and A0-A15 (numbers 54-69; digital only). PWM: 2-13, 44-46.
+ *   Pins 0 and 1 are the USB serial link and are never driven.
+ *   ANALOG_WRITE on a pin without PWM keeps the old behaviour (on at >= 128)
+ *   and answers  ERR\tpin <n> has no PWM.  Once a servo has been attached, the
+ *   Servo library owns Timer5 (pins 44, 45 and 46) from the first servo until reset, so PWM
+ *   on those pins is refused with
+ *   ERR\tpin <n>: no PWM once servos are used  (until the board is reset).
+ *   Up to 8 servos at once.
+ *   Replies are sent at most once per second.
+ *
  * Link watchdog / failsafe
  *   Every valid packet (heartbeat included) refreshes lastPacketMillis.
  *   Once any output has been driven ("armed"), if no valid packet arrives
@@ -46,26 +60,38 @@
  *   command that drives an output.
  *
  *   failsafeStop():
- *     - every pin driven via DIGITAL_WRITE / ANALOG_WRITE since boot -> LOW
+ *     - every pin driven as an output since boot -> LOW
  *     - continuous servos (last driven with SERVO_WRITE_US) -> 1500 µs (stop)
  *     - positional servos (last driven with SERVO_WRITE) keep their angle
  */
 
-const byte HEADER_BYTE      = 0xAA; // control frame
+const byte HEADER_BYTE = 0xAA;      // control frame
 const byte TEXT_HEADER_BYTE = 0xAB; // text frame
-const byte CMD_HEARTBEAT   = 0x00;
-const byte CMD_DIGITAL_WRITE  = 0x01;
-const byte CMD_ANALOG_WRITE   = 0x02;
-const byte CMD_PIN_MODE       = 0x03;
-const byte CMD_SERVO_WRITE    = 0x04;
-const byte CMD_SERVO_WRITE_US = 0x05;
-const byte CMD_STOP_ALL       = 0x06;
+const byte CMD_HEARTBEAT = 0x00;
+const byte CMD_DIGITAL_WRITE = 0x01;
+const byte CMD_ANALOG_WRITE = 0x02;
+const byte CMD_PIN_MODE = 0x03;
+const byte CMD_SERVO_WRITE = 0x04;    // Positional servo: val = angle 0-180
+const byte CMD_SERVO_WRITE_US = 0x05; // Continuous servo: val encodes µs as (µs-1300)/2, range 0-200
+const byte CMD_STOP_ALL = 0x06;       // Failsafe stop of every driven output (pin/val ignored)
 
-// Mega has 54 digital pins (0-53)
-#define MAX_PINS 54
+// Usable pins are FIRST_PIN .. NUM_PINS-1 (digital pins, then the analog
+// pins used as digital outputs).
+#define FIRST_PIN 2
+#define NUM_PINS 70
+
+// Servo objects are handed out on attach. Each Servo object reserves a slot
+// in the library when it is constructed, so there must be only a few.
+#define SERVO_POOL 8
+
+// PWM pins whose timer the Servo library takes over once a servo is attached
+const uint8_t SERVO_TIMER_PINS[] = {44, 45, 46};
 
 // Link watchdog: app heartbeats every 500 ms, we give up after 2 s of silence
 #define WATCHDOG_TIMEOUT_MS 2000
+
+// Minimum time between two ERR replies (a program loop could flood the link)
+#define ERR_REPLY_INTERVAL_MS 1000
 
 // Longest text frame body we accept (AVR RAM is tight). The body is never
 // stored: this board only validates the frame and replies ERR\tunsupported.
@@ -83,105 +109,38 @@ uint8_t textIdx = 0; // text frame: body bytes consumed so far
 uint8_t textSum = 0; // text frame: running checksum (wraps at 256)
 
 uint8_t cmd, pin, val;
-Servo activeServos[MAX_PINS];
-bool isServoAttached[MAX_PINS];
+
+Servo servoPool[SERVO_POOL];
+int8_t servoSlotOfPin[NUM_PINS]; // -1 = no servo on this pin
+uint8_t servosAttached = 0;
+// The Servo library takes over a timer on the first attach and never gives
+// it back (not even after the last detach), so remember it until reset.
+bool servoTimerClaimed = false;
 
 // Failsafe bookkeeping
-bool pinTouched[MAX_PINS];          // driven via DIGITAL_WRITE / ANALOG_WRITE since boot
-bool servoIsContinuous[MAX_PINS];   // last servo command on this pin was SERVO_WRITE_US
+bool pinTouched[NUM_PINS];          // driven as an output since boot
+bool servoIsContinuous[NUM_PINS];   // last servo command on this pin was SERVO_WRITE_US
+bool pinUsedByProgram[NUM_PINS];    // any command addressed this pin (activity LED check)
 bool outputsArmed = false;          // any output driven since the last failsafe
 unsigned long lastPacketMillis = 0; // refreshed on every valid packet
+unsigned long lastErrMillis = 0;
 
 unsigned long lastPulse = 0;
 
-// Stop everything we have ever driven. Safe to call repeatedly.
-void failsafeStop() {
-  for (uint8_t p = 0; p < MAX_PINS; p++) {
-    if (pinTouched[p]) {
-      // digitalWrite on AVR also switches off any PWM running on the pin
-      digitalWrite(p, LOW);
-    }
-    if (isServoAttached[p] && servoIsContinuous[p]) {
-      activeServos[p].writeMicroseconds(1500); // stop continuous rotation
-    }
+// Send a text frame [0xAB][LEN][text][CK] over Serial from a RAM string.
+void sendText(const char *text) {
+  uint8_t len = (uint8_t)strlen(text);
+  uint8_t sum = (uint8_t)(TEXT_HEADER_BYTE + len);
+  Serial.write(TEXT_HEADER_BYTE);
+  Serial.write(len);
+  for (uint8_t i = 0; i < len; i++) {
+    Serial.write((uint8_t)text[i]);
+    sum += (uint8_t)text[i];
   }
-  outputsArmed = false;
+  Serial.write(sum);
 }
 
-void executeCommand(uint8_t c, uint8_t p, uint8_t v) {
-  // Every valid packet (heartbeat included) refreshes the link watchdog
-  lastPacketMillis = millis();
-
-  // Heartbeat: no-op, and no LED pulse (it arrives twice a second)
-  if (c == CMD_HEARTBEAT) return;
-
-  digitalWrite(LED_BUILTIN, HIGH);
-  lastPulse = millis();
-
-  if (c == CMD_STOP_ALL) {
-    failsafeStop();
-    return;
-  }
-
-  // Reserve pins 0 and 1 (Serial), block out-of-range pins
-  if (p < 2 || p >= MAX_PINS) return;
-
-  if (c == CMD_PIN_MODE) {
-    if (v == 1)      pinMode(p, OUTPUT);
-    else if (v == 0) pinMode(p, INPUT);
-    else if (v == 2) pinMode(p, INPUT_PULLUP);
-    if (isServoAttached[p]) {
-      activeServos[p].detach();
-      isServoAttached[p] = false;
-    }
-    // A pin reconfigured as an input is no longer something we drive
-    if (v == 0 || v == 2) pinTouched[p] = false;
-
-  } else if (c == CMD_DIGITAL_WRITE) {
-    if (isServoAttached[p]) {
-      activeServos[p].detach();
-      isServoAttached[p] = false;
-    }
-    pinMode(p, OUTPUT);
-    digitalWrite(p, v ? HIGH : LOW);
-    pinTouched[p] = true;
-    outputsArmed = true;
-
-  } else if (c == CMD_ANALOG_WRITE) {
-    if (isServoAttached[p]) {
-      activeServos[p].detach();
-      isServoAttached[p] = false;
-    }
-    pinMode(p, OUTPUT);
-    analogWrite(p, v);
-    pinTouched[p] = true;
-    outputsArmed = true;
-
-  } else if (c == CMD_SERVO_WRITE) {
-    // Positional servo: val = angle in degrees (0-180)
-    if (!isServoAttached[p]) {
-      activeServos[p].attach(p, 544, 2400);
-      isServoAttached[p] = true;
-    }
-    activeServos[p].write(v);
-    servoIsContinuous[p] = false; // positional: left holding its angle on failsafe
-    outputsArmed = true;
-
-  } else if (c == CMD_SERVO_WRITE_US) {
-    // Continuous rotation servo: val encodes pulse width as (µs - 1300) / 2
-    // val=0 -> 1300µs (full rev), val=100 -> 1500µs (stop), val=200 -> 1700µs (full fwd)
-    if (!isServoAttached[p]) {
-      activeServos[p].attach(p, 1000, 2000);
-      isServoAttached[p] = true;
-    }
-    unsigned int us = 1300 + ((unsigned int)v * 2);
-    activeServos[p].writeMicroseconds(us);
-    servoIsContinuous[p] = true; // continuous: driven to 1500µs on failsafe
-    outputsArmed = true;
-  }
-}
-
-// Send a text frame [0xAB][LEN][text][CK] over Serial. `text` lives in flash.
+// Same for a string that lives in flash (F("...")).
 void sendText(const __FlashStringHelper *text) {
   PGM_P p = reinterpret_cast<PGM_P>(text);
   uint8_t len = (uint8_t)strlen_P(p);
@@ -194,6 +153,145 @@ void sendText(const __FlashStringHelper *text) {
     sum += c;
   }
   Serial.write(sum);
+}
+
+// "ERR\t<prefix><pin><suffix>", at most once per ERR_REPLY_INTERVAL_MS.
+void replyPinError(const char *prefix, uint8_t p, const char *suffix) {
+  unsigned long now = millis();
+  if (now - lastErrMillis < ERR_REPLY_INTERVAL_MS)
+    return;
+  lastErrMillis = now;
+  char msg[48];
+  snprintf(msg, sizeof(msg), "ERR\t%s%u%s", prefix, (unsigned)p, suffix);
+  sendText(msg);
+}
+
+bool isServoTimerPin(uint8_t p) {
+  for (uint8_t i = 0; i < sizeof(SERVO_TIMER_PINS); i++) {
+    if (SERVO_TIMER_PINS[i] == p)
+      return true;
+  }
+  return false;
+}
+
+void detachServo(uint8_t p) {
+  int8_t slot = servoSlotOfPin[p];
+  if (slot < 0)
+    return;
+  servoPool[slot].detach();
+  servoSlotOfPin[p] = -1;
+  servosAttached--;
+}
+
+// Returns the servo on pin p, attaching a free pool slot if needed; NULL if
+// every slot is in use.
+Servo *servoFor(uint8_t p, int minUs, int maxUs) {
+  if (servoSlotOfPin[p] >= 0)
+    return &servoPool[servoSlotOfPin[p]];
+  for (int8_t slot = 0; slot < SERVO_POOL; slot++) {
+    if (!servoPool[slot].attached()) {
+      servoPool[slot].attach(p, minUs, maxUs);
+      servoSlotOfPin[p] = slot;
+      servosAttached++;
+      servoTimerClaimed = true;
+      pinTouched[p] = false; // owned by the servo now, not a plain output
+      return &servoPool[slot];
+    }
+  }
+  return NULL;
+}
+
+// Stop everything we have ever driven. Safe to call repeatedly.
+void failsafeStop() {
+  for (uint8_t p = FIRST_PIN; p < NUM_PINS; p++) {
+    if (pinTouched[p]) {
+      // digitalWrite on AVR also switches off any PWM running on the pin
+      digitalWrite(p, LOW);
+    }
+    if (servoSlotOfPin[p] >= 0 && servoIsContinuous[p]) {
+      servoPool[servoSlotOfPin[p]].writeMicroseconds(1500); // stop continuous rotation
+    }
+  }
+  outputsArmed = false;
+}
+
+void executeCommand(uint8_t c, uint8_t p, uint8_t v) {
+  // Every valid packet (heartbeat included) refreshes the link watchdog
+  lastPacketMillis = millis();
+
+  // Heartbeat: no-op, and no LED pulse (it arrives twice a second)
+  if (c == CMD_HEARTBEAT)
+    return;
+
+  if (c == CMD_STOP_ALL) {
+    failsafeStop();
+    return;
+  }
+
+  // Pins 0/1 are the USB serial link; others must exist on this board
+  if (p < FIRST_PIN || p >= NUM_PINS) {
+    replyPinError("bad pin ", p, "");
+    return;
+  }
+  pinUsedByProgram[p] = true;
+
+  // Activity blink on the built-in LED, unless the program uses that pin
+  if (!pinUsedByProgram[LED_BUILTIN]) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    lastPulse = millis();
+  }
+
+  if (c == CMD_PIN_MODE) {
+    detachServo(p);
+    if (v == 1) {
+      pinMode(p, OUTPUT);
+      pinTouched[p] = true; // an output we may have to force LOW
+    } else if (v == 0) {
+      pinMode(p, INPUT);
+    } else if (v == 2) {
+      pinMode(p, INPUT_PULLUP);
+    }
+    // A pin reconfigured as an input is no longer something we drive
+    if (v == 0 || v == 2)
+      pinTouched[p] = false;
+  } else if (c == CMD_DIGITAL_WRITE) {
+    detachServo(p);
+    pinMode(p, OUTPUT);
+    digitalWrite(p, v ? HIGH : LOW);
+    pinTouched[p] = true;
+    outputsArmed = true;
+  } else if (c == CMD_ANALOG_WRITE) {
+    detachServo(p);
+    if (servoTimerClaimed && isServoTimerPin(p)) {
+      // The Servo library runs this pin's timer; analogWrite would disturb
+      // every servo and still not give PWM here.
+      replyPinError("pin ", p, ": no PWM once servos are used");
+      return;
+    }
+    if (digitalPinToTimer(p) == NOT_ON_TIMER) {
+      replyPinError("pin ", p, " has no PWM");
+    }
+    pinMode(p, OUTPUT);
+    analogWrite(p, v); // on a non-PWM pin: HIGH at >= 128, else LOW
+    pinTouched[p] = true;
+    outputsArmed = true;
+  } else if (c == CMD_SERVO_WRITE || c == CMD_SERVO_WRITE_US) {
+    bool continuous = (c == CMD_SERVO_WRITE_US);
+    Servo *s = continuous ? servoFor(p, 1000, 2000) : servoFor(p, 544, 2400);
+    if (s == NULL) {
+      replyPinError("too many servos, pin ", p, " ignored");
+      return;
+    }
+    if (continuous) {
+      // val encodes the pulse width as (µs - 1300) / 2:
+      // 0 -> 1300 µs (full reverse), 100 -> 1500 µs (stop), 200 -> 1700 µs (full forward)
+      s->writeMicroseconds(1300 + ((unsigned int)v * 2));
+    } else {
+      s->write(v);
+    }
+    servoIsContinuous[p] = continuous; // continuous ones are stopped on failsafe
+    outputsArmed = true;
+  }
 }
 
 void processByte(uint8_t b) {
@@ -255,15 +353,15 @@ void processByte(uint8_t b) {
 
 void setup() {
   Serial.begin(115200);
-  pinMode(LED_BUILTIN, OUTPUT);
-
-  for (int i = 0; i < MAX_PINS; i++) {
-    isServoAttached[i] = false;
+  for (uint8_t i = 0; i < NUM_PINS; i++) {
+    servoSlotOfPin[i] = -1;
     pinTouched[i] = false;
     servoIsContinuous[i] = false;
+    pinUsedByProgram[i] = false;
   }
+  pinMode(LED_BUILTIN, OUTPUT);
 
-  // Power-on blink sequence
+  // Power-on sequence
   for (int i = 0; i < 3; i++) {
     digitalWrite(LED_BUILTIN, HIGH);
     delay(100);
@@ -283,8 +381,10 @@ void loop() {
     sendText(F("WATCHDOG\tlink lost"));
   }
 
+  // Activity blink lasts 40 ms
   if (lastPulse != 0 && (millis() - lastPulse > 40)) {
-    digitalWrite(LED_BUILTIN, LOW);
+    if (!pinUsedByProgram[LED_BUILTIN])
+      digitalWrite(LED_BUILTIN, LOW);
     lastPulse = 0;
   }
 }
