@@ -29,10 +29,19 @@ class ActuatorService {
     if (jsonString != null) {
       try {
         final List<dynamic> jsonList = jsonDecode(jsonString);
-        _actuators.clear();
-        _actuators.addAll(
-          jsonList.map((json) => ActuatorConfig.fromJson(json as Map<String, dynamic>))
-        );
+        // Load entries one by one: a single malformed entry used to abort the
+        // whole load, leaving an empty list that the next save persisted.
+        final loaded = <ActuatorConfig>[];
+        for (final json in jsonList) {
+          try {
+            loaded.add(ActuatorConfig.fromJson(json as Map<String, dynamic>));
+          } catch (e) {
+            debugPrint("Skipping unreadable actuator entry: $e");
+          }
+        }
+        _actuators
+          ..clear()
+          ..addAll(loaded);
         _actuatorsController.add(_actuators);
       } catch (e) {
         debugPrint("Error loading actuators: $e");
