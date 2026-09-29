@@ -30,7 +30,7 @@ class VisionService {
       StreamController<List<DetectedObjectData>>.broadcast();
   Stream<List<DetectedObjectData>> get resultsStream => _resultsController.stream;
 
-  String get loadedModelName => 'TFLite SSD-MobileNet (COCO)';
+  String get loadedModelName => 'EfficientDet-Lite0 int8 (COCO)';
   double get averageInferenceMs => _detector.averageInferenceMs;
 
   // Camera management
@@ -329,7 +329,7 @@ class VisionService {
 
     final controller = CameraController(
       description,
-      // 320x240 on most devices: the model input is 300x300 so anything
+      // 320x240 on most devices: the model input is 320x320 so anything
       // larger is wasted work in the YUV→tensor loop.
       ResolutionPreset.low,
       enableAudio: false,

@@ -9,7 +9,7 @@ and run on the phone.
 
 ```
 ┌────────────── phone (this app) ──────────────┐        ┌── controller ──┐
-│ camera → TFLite SSD-MobileNet → tracking     │  BLE   │ ESP32 / Uno /  │
+│ camera → TFLite EfficientDet-Lite0 → track   │  BLE   │ ESP32 / Uno /  │
 │ mic    → speech-to-text / loudness           │  USB   │ Mega running   │
 │ IMU    → tilt / shake / yaw / compass        │◀─WiFi─▶│ arduino/*.ino  │
 │ blocks → BlockScriptRunner                   │ framed │ motors, servos │
@@ -155,8 +155,9 @@ Bluetooth reconnects automatically (5 attempts, 2 s apart) after a drop.
 
 ## Vision notes
 
-- Model: `assets/ml/1.tflite` (SSD-MobileNet v1, 300×300, COCO labels in
-  `labelmap.txt`; line 0 is the background placeholder).
+- Model: `assets/ml/1.tflite` — EfficientDet-Lite0 int8 (TF Hub/Kaggle), 320×320
+  input, COCO labels in `labelmap.txt` (line 0 is the background placeholder).
+  Accuracy, latency and limitations: [docs/MODELS.md](docs/MODELS.md).
 - Camera runs at `ResolutionPreset.low`; frames are throttled to ~25 FPS and
   skipped while the isolate is busy. Bounding boxes are normalized (0..1) in
   portrait display space.
