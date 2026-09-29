@@ -25,14 +25,18 @@ class Outcome {
   String toString() => 'out=$out error=${error.runtimeType}: $error uncaught=$uncaught';
 }
 
-Future<Outcome> run(String src, {CancelToken? cancel}) async {
+Future<Outcome> run(String src, {CancelToken? cancel, int? recursionLimit}) async {
   final out = <String>[];
   final uncaught = <Object>[];
   Object? error;
   final done = Completer<void>();
   runZonedGuarded(() async {
     try {
-      await Interpreter(onPrint: out.add, cancel: cancel).run(src);
+      await Interpreter(
+        onPrint: out.add,
+        cancel: cancel,
+        recursionLimit: recursionLimit ?? Interpreter.maxRecursionDepth,
+      ).run(src);
     } catch (e) {
       error = e;
     }
@@ -142,7 +146,14 @@ void main() {
     });
 
     test('recursion limit also works inside the test zone', () async {
-      await expectPyError('def f(n):\n    return f(n + 1)\nf(0)\n', line: 2, message: 'maximum recursion depth');
+      // The test zone captures a stack trace at every async gap, which makes
+      // deep recursion quadratic *here only*; a small limit keeps it fast
+      // while still exercising the error path in this zone.
+      final o = await run('def f(n):\n    return f(n + 1)\nf(0)\n', recursionLimit: 60);
+      expect(o.error, isA<PyRuntimeError>(), reason: '$o');
+      expect('${o.error}', contains('maximum recursion depth'));
+      expect(o.line, 2);
+      expect(o.uncaught, isEmpty);
     });
   });
 

@@ -87,13 +87,15 @@ class Interpreter {
   int _currentLine = 0;
   int get currentLine => _currentLine;
 
-  /// Python-level call depth limit (CPython's default is also 1000).
+  /// Default Python-level call depth limit (CPython's default is also 1000).
   static const int maxRecursionDepth = 1000;
+  final int recursionLimit;
   int _callDepth = 0;
 
   Interpreter({
     required this.onPrint,
     this.onLine,
+    this.recursionLimit = maxRecursionDepth,
     CancelToken? cancel,
     Map<String, Object?> extraGlobals = const {},
   }) : cancel = cancel ?? CancelToken() {
@@ -751,11 +753,16 @@ class Interpreter {
       }
     }
     if (fn is PyFunction) {
-      if (_callDepth >= maxRecursionDepth) {
+      if (_callDepth >= recursionLimit) {
         throw PyRuntimeError('maximum recursion depth exceeded', line);
       }
       _callDepth++;
       try {
+        // Start the body on a fresh microtask. Otherwise every Python call
+        // runs synchronously inside its caller's Dart frames, so recursion
+        // depth becomes native stack depth; on a small stack (phones, or the
+        // test zone) that overflowed long before the limit above.
+        await Future<void>.value();
         return await _callFunction(fn, args, kwargs, line);
       } finally {
         _callDepth--;
