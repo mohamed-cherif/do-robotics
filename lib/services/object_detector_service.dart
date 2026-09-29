@@ -67,16 +67,38 @@ class ObjectDetectorService {
   double get averageInferenceMs => _avgInferenceMs;
   DateTime _frameSentAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-  Future<void> initialize() async {
-    if (_isReady) return;
+  Future<void>? _initFuture;
+  /// Bumped by [stop] so an initialization that is still in flight knows it
+  /// was cancelled and tears down what it created.
+  int _generation = 0;
 
-    _receivePort = ReceivePort();
-    _isolate = await Isolate.spawn(_isolateEntryPoint, _receivePort!.sendPort);
+  /// Spawns the inference isolate and waits until the model is loaded. Safe
+  /// to call concurrently. Throws [StateError] when the model cannot load, so
+  /// callers can tell the user instead of silently never detecting anything.
+  Future<void> initialize() {
+    if (_isReady) return Future.value();
+    return _initFuture ??= () async {
+      try {
+        await _initialize();
+      } finally {
+        _initFuture = null;
+      }
+    }();
+  }
 
-    final completer = Completer<SendPort>();
-    _receiveSub = _receivePort!.listen((message) {
+  Future<void> _initialize() async {
+    final generation = _generation;
+    final receivePort = ReceivePort();
+    final isolate = await Isolate.spawn(_isolateEntryPoint, receivePort.sendPort);
+
+    final portReady = Completer<SendPort>();
+    final modelReady = Completer<String?>(); // null = OK, else the error
+    final sub = receivePort.listen((message) {
       if (message is SendPort) {
-        completer.complete(message);
+        if (!portReady.isCompleted) portReady.complete(message);
+      } else if (message is _ModelStatus) {
+        debugPrint('ISOLATE: ${message.info}');
+        if (!modelReady.isCompleted) modelReady.complete(message.error);
       } else if (message is List<DetectionResult>) {
         _recordLatency();
         _resultsController.add(message);
@@ -90,15 +112,37 @@ class ObjectDetectorService {
       }
     });
 
-    _sendPort = await completer.future;
+    void abandon() {
+      sub.cancel();
+      receivePort.close();
+      isolate.kill(priority: Isolate.immediate);
+    }
 
-    debugPrint('Loading model assets for isolate...');
-    final modelData = await rootBundle.load(modelAsset);
-    final modelBytes = modelData.buffer.asUint8List();
-    final labelsStr = await rootBundle.loadString(labelsAsset);
-
-    _sendPort!.send(_InitCommand(modelBytes, labelsStr));
-    _isReady = true;
+    try {
+      final sendPort = await portReady.future.timeout(const Duration(seconds: 10));
+      final modelData = await rootBundle.load(modelAsset);
+      final labelsStr = await rootBundle.loadString(labelsAsset);
+      sendPort.send(_InitCommand(modelData.buffer.asUint8List(), labelsStr));
+      final error = await modelReady.future.timeout(const Duration(seconds: 20),
+          onTimeout: () => 'timed out loading the model');
+      if (error != null) {
+        throw StateError('Vision model failed to load: $error');
+      }
+      if (generation != _generation) {
+        // stop() ran while we were loading.
+        abandon();
+        return;
+      }
+      _isolate = isolate;
+      _receivePort = receivePort;
+      _receiveSub = sub;
+      _sendPort = sendPort;
+      _isProcessing = false;
+      _isReady = true;
+    } catch (_) {
+      abandon();
+      rethrow;
+    }
   }
 
   void _recordLatency() {
@@ -142,6 +186,7 @@ class ObjectDetectorService {
   }
 
   void stop() {
+    _generation++;
     _receiveSub?.cancel();
     _receiveSub = null;
     _receivePort?.close();
@@ -216,11 +261,13 @@ class ObjectDetectorService {
           }
 
           labels = message.labels.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-          mainSendPort.send(
+          mainSendPort.send(_ModelStatus(null,
               'Model loaded. Input: $inputShape ($inputType), detections: $numDetections, '
-              'threads: $threads, outputs: boxes=$boxesIdx classes=$classesIdx scores=$scoresIdx count=$countIdx');
+              'threads: $threads, outputs: boxes=$boxesIdx classes=$classesIdx scores=$scoresIdx count=$countIdx'));
         } catch (e) {
-          mainSendPort.send('Error loading model: $e');
+          interpreter?.close();
+          interpreter = null;
+          mainSendPort.send(_ModelStatus('$e', 'Error loading model: $e'));
         }
       } else if (message is _FrameCmd) {
         // ── Line-following mode: Sobel edge detection, skip TFLite ───────────
@@ -459,45 +506,81 @@ class ObjectDetectorService {
 
   // ── Sobel line detection ──────────────────────────────────────────────────
   //
-  // Uses only the Y (luminance) plane — zero conversion cost. Crops the bottom
-  // 40% of the frame (floor region), computes a horizontal Sobel gradient per
+  // Uses only the Y (luminance) plane — zero conversion cost. Works in the
+  // *upright* frame (the same rotation the object detector applies), crops the
+  // bottom 40% (floor region), computes a horizontal Sobel gradient per
   // column, then locates the line as the energy-weighted centroid around the
   // strongest column. The centroid (rather than the raw argmax) makes the
   // offset stable frame-to-frame instead of jumping between the two edges of
   // the tape.
+  //
+  // Camera frames arrive in sensor orientation (landscape on most phones).
+  // Without applying the rotation, a phone in portrait measured the "floor"
+  // band along one side of the picture and the offset along the vertical axis.
 
   static LineDetectionResult _detectLine(_FrameCmd cmd) {
     if (cmd.planes.isEmpty) {
       return const LineDetectionResult(offsetX: 0.0, detected: false, confidence: 0.0);
     }
-    final srcW = cmd.width;
-    final srcH = cmd.height;
-    final yBytes = cmd.planes[0].bytes;
-    final yRow = cmd.planes[0].bytesPerRow;
-    if (srcW < 3 || srcH < 3) {
-      return const LineDetectionResult(offsetX: 0.0, detected: false, confidence: 0.0);
+    return detectLineInLuma(cmd.planes[0].bytes, cmd.planes[0].bytesPerRow,
+        cmd.width, cmd.height, cmd.rotation);
+  }
+
+  /// Line detection on a raw luminance plane. [rotation] is the clockwise
+  /// rotation (0/90/180/270) that makes the sensor frame upright, exactly as
+  /// passed to the object detector. The offset uses the same display-space
+  /// convention as object bounding boxes. Public for tests.
+  static LineDetectionResult detectLineInLuma(
+      Uint8List luma, int bytesPerRow, int srcW, int srcH, int rotation) {
+    const none = LineDetectionResult(offsetX: 0.0, detected: false, confidence: 0.0);
+    final swap = rotation == 90 || rotation == 270;
+    final uW = swap ? srcH : srcW; // upright width
+    final uH = swap ? srcW : srcH; // upright height
+    final startY = (uH * 0.6).round();
+    final bandH = uH - startY;
+    if (uW < 3 || bandH < 3) return none;
+
+    // Copy the floor band of the upright image into a compact buffer. The
+    // sensor↔upright mapping matches _directToTensor.
+    final band = Uint8List(uW * bandH);
+    final len = luma.length;
+    for (int by = 0; by < bandH; by++) {
+      final uy = startY + by;
+      for (int ux = 0; ux < uW; ux++) {
+        int sx, sy;
+        if (rotation == 90) {
+          sx = uy;
+          sy = srcH - 1 - ux;
+        } else if (rotation == 270) {
+          sx = srcW - 1 - uy;
+          sy = ux;
+        } else if (rotation == 180) {
+          sx = srcW - 1 - ux;
+          sy = srcH - 1 - uy;
+        } else {
+          sx = ux;
+          sy = uy;
+        }
+        final idx = sy * bytesPerRow + sx;
+        band[by * uW + ux] = idx < len ? luma[idx] : 0;
+      }
     }
 
-    // Process bottom 40% of frame only (floor region)
-    final int startY = (srcH * 0.6).round();
-    final int endY = srcH - 1;
-
-    final columnEnergy = Float64List(srcW);
-    for (int y = startY + 1; y < endY; y++) {
-      final rowAbove = (y - 1) * yRow, row = y * yRow, rowBelow = (y + 1) * yRow;
-      if (rowBelow + srcW > yBytes.length) break;
-      for (int x = 1; x < srcW - 1; x++) {
-        final int gx = -yBytes[rowAbove + x - 1] + yBytes[rowAbove + x + 1]
-            - 2 * yBytes[row + x - 1] + 2 * yBytes[row + x + 1]
-            - yBytes[rowBelow + x - 1] + yBytes[rowBelow + x + 1];
+    final columnEnergy = Float64List(uW);
+    for (int y = 1; y < bandH - 1; y++) {
+      final rowAbove = (y - 1) * uW, row = y * uW, rowBelow = (y + 1) * uW;
+      for (int x = 1; x < uW - 1; x++) {
+        final int gx = -band[rowAbove + x - 1] + band[rowAbove + x + 1]
+            - 2 * band[row + x - 1] + 2 * band[row + x + 1]
+            - band[rowBelow + x - 1] + band[rowBelow + x + 1];
         columnEnergy[x] += gx.abs();
       }
     }
 
     double maxEnergy = 0;
     double totalEnergy = 0;
-    int bestCol = srcW ~/ 2;
-    for (int x = 1; x < srcW - 1; x++) {
+    int bestCol = uW ~/ 2;
+    for (int x = 1; x < uW - 1; x++) {
       totalEnergy += columnEnergy[x];
       if (columnEnergy[x] > maxEnergy) {
         maxEnergy = columnEnergy[x];
@@ -506,7 +589,7 @@ class ObjectDetectorService {
     }
 
     // Confidence: ratio of peak column energy to average.
-    final double avgEnergy = totalEnergy / (srcW - 2);
+    final double avgEnergy = totalEnergy / (uW - 2);
     final double confidence = avgEnergy > 0
         ? ((maxEnergy / avgEnergy - 1.0) / 10.0).clamp(0.0, 1.0)
         : 0.0;
@@ -514,15 +597,19 @@ class ObjectDetectorService {
 
     // Energy-weighted centroid in a window around the peak (±12% of width)
     // so a tape with two strong edges resolves to its middle.
-    final int half = (srcW * 0.12).round().clamp(2, srcW ~/ 2);
+    final int half = (uW * 0.12).round().clamp(2, uW ~/ 2);
     double weighted = 0, weightSum = 0;
-    for (int x = (bestCol - half).clamp(1, srcW - 2); x <= (bestCol + half).clamp(1, srcW - 2); x++) {
+    for (int x = (bestCol - half).clamp(1, uW - 2); x <= (bestCol + half).clamp(1, uW - 2); x++) {
       weighted += x * columnEnergy[x];
       weightSum += columnEnergy[x];
     }
     final double centerCol = weightSum > 0 ? weighted / weightSum : bestCol.toDouble();
 
-    final double offsetX = (centerCol / srcW - 0.5) * 2.0;
+    double offsetX = (centerCol / uW - 0.5) * 2.0;
+    // Same convention as object boxes: when the display is rotated 180° from
+    // the upright frame (phone set to "mounted upside down"), left and right
+    // swap. See the net-rotation mapping in the detection loop.
+    if ((90 - rotation + 360) % 360 == 180) offsetX = -offsetX;
     return LineDetectionResult(offsetX: offsetX, detected: detected, confidence: confidence);
   }
 
@@ -603,6 +690,13 @@ class ObjectDetectorService {
       return buf.reshape([1, h, w, 3]);
     }
   }
+}
+
+class _ModelStatus {
+  /// null when the model loaded, otherwise the error text.
+  final String? error;
+  final String info;
+  const _ModelStatus(this.error, this.info);
 }
 
 class _InitCommand {

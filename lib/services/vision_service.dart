@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import '../utils/shared_lease.dart';
 import 'object_detector_service.dart';
 import 'vision_preferences.dart';
 
@@ -44,10 +45,13 @@ class VisionService {
   /// When true, run Sobel line detection instead of TFLite.
   bool lineMode = false;
 
-  /// Users of the camera stream (pages, the block runner). The stream is only
-  /// torn down when the last user releases it, so leaving the camera page
-  /// while a script is running no longer kills the script's vision.
-  int _streamUsers = 0;
+  /// Users of the camera stream (pages, the runners). The camera is only torn
+  /// down when the last user releases it, so leaving the camera page while a
+  /// script is running no longer kills the script's vision. Opens and closes
+  /// are serialized, so STOP during camera start-up cannot leak the camera.
+  late final SharedLease _cameraLease =
+      SharedLease(open: _openCamera, close: _closeCamera);
+  Future<void>? _initFuture;
 
   // Line detection state
   double _lineOffsetX = 0.0;
@@ -217,7 +221,20 @@ class VisionService {
     return fallback;
   }
 
-  Future<void> initialize() async {
+  /// Loads preferences and the detector. Safe to call concurrently; callers
+  /// share one in-flight initialization.
+  Future<void> initialize() {
+    return _initFuture ??= () async {
+      try {
+        await _initialize();
+      } catch (_) {
+        _initFuture = null;
+        rethrow;
+      }
+    }();
+  }
+
+  Future<void> _initialize() async {
     if (_isInitialized) return;
     try {
       await refreshFilters();
@@ -273,44 +290,44 @@ class VisionService {
     _resultsController.add(mapped);
   }
 
-  /// Starts the camera stream. Every caller must later call [stopStream].
-  Future<void> startStream() async {
-    if (!_isInitialized) {
-      await initialize();
-    }
-    _streamUsers++;
+  /// Acquires the camera stream for one user. Every call — including one that
+  /// throws — must be balanced by exactly one [stopStream].
+  Future<void> startStream() => _cameraLease.acquire();
 
-    if (_camera != null && _camera!.value.isStreamingImages) {
-      return;
-    }
+  Future<void> _openCamera() async {
+    await initialize();
+    if (_camera?.value.isStreamingImages ?? false) return;
 
+    final cameras = await availableCameras();
+    if (cameras.isEmpty) {
+      throw StateError('No camera available on this device');
+    }
+    final description = cameras.firstWhere(
+      (c) => c.lensDirection == CameraLensDirection.back,
+      orElse: () => cameras.first,
+    );
+
+    final controller = CameraController(
+      description,
+      // 320x240 on most devices: the model input is 300x300 so anything
+      // larger is wasted work in the YUV→tensor loop.
+      ResolutionPreset.low,
+      enableAudio: false,
+      imageFormatGroup: Platform.isAndroid
+          ? ImageFormatGroup.yuv420 // reliable separate U/V planes
+          : ImageFormatGroup.bgra8888,
+    );
     try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        throw StateError('No camera available on this device');
-      }
-      final camera = cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
-        orElse: () => cameras.first,
-      );
-
-      _camera = CameraController(
-        camera,
-        // 320x240 on most devices: the model input is 300x300 so anything
-        // larger is wasted work in the YUV→tensor loop.
-        ResolutionPreset.low,
-        enableAudio: false,
-        imageFormatGroup: Platform.isAndroid
-            ? ImageFormatGroup.yuv420 // reliable separate U/V planes
-            : ImageFormatGroup.bgra8888,
-      );
-
-      await _camera!.initialize();
-      await _camera!.startImageStream(_onCameraImage);
+      await controller.initialize();
+      _camera = controller;
+      await controller.startImageStream(_onCameraImage);
       debugPrint('✅ Camera stream started');
     } catch (e) {
-      _streamUsers = (_streamUsers - 1).clamp(0, 1 << 30);
       debugPrint('❌ Camera start error: $e');
+      _camera = null;
+      try {
+        await controller.dispose();
+      } catch (_) {}
       rethrow;
     }
   }
@@ -344,12 +361,21 @@ class VisionService {
     return (sensorOrientation - deviceRotation + 360) % 360;
   }
 
-  /// Releases one stream user. The camera is only disposed when nobody needs it.
-  Future<void> stopStream({bool force = false}) async {
-    _streamUsers = (_streamUsers - 1).clamp(0, 1 << 30);
-    if (_streamUsers > 0 && !force) return;
-    _streamUsers = 0;
+  /// Completes once the next camera frame has been processed (object
+  /// detections, or a line result in [lineMode]), or after [timeout].
+  Future<void> nextFrame({Duration timeout = const Duration(seconds: 2)}) {
+    final next = lineMode
+        ? _detector.lineResultsStream.first
+        : _detector.resultsStream.first;
+    return next.then<void>((_) {}).timeout(timeout, onTimeout: () {});
+  }
 
+  /// Releases one stream user. The camera is only disposed when nobody needs
+  /// it; [force] releases every user.
+  Future<void> stopStream({bool force = false}) =>
+      _cameraLease.release(force: force);
+
+  Future<void> _closeCamera() async {
     _lineSub?.cancel();
     _lineSub = null;
     _detectionSub?.cancel();
@@ -375,7 +401,9 @@ class VisionService {
     _lastDetections = [];
     _trackedObject = null;
     _lineDetected = false;
+    _lineOffsetX = 0.0;
     _isInitialized = false;
+    _initFuture = null;
   }
 
   void dispose() {
