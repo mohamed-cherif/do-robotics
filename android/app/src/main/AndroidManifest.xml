@@ -1,12 +1,39 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-<uses-permission android:name="android.permission.CAMERA"/>
-<uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
-<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-<uses-permission android:name="android.permission.RECORD_AUDIO" />
-<uses-permission android:name="android.permission.INTERNET"/>
-<uses-feature android:name="android.hardware.camera.any" />
-<uses-feature android:name="android.hardware.usb.host" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Camera: object detection / line following. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Microphone: voice commands and loudness. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- WiFi link to the ESP32 (TCP) and mDNS discovery of robot.local. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- Bluetooth LE link to the ESP32.
+         Android 12+: runtime SCAN/CONNECT. We never derive location from scans.
+         Android 11 and lower: the legacy install-time permissions plus fine
+         location (required by the OS for BLE scanning on those versions).
+         flutter_blue_plus deliberately declares none of these itself. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+
+    <!-- Implied by libraries, never used by the app. The TFLite GPU-api AAR
+         declares no targetSdk, which makes the manifest merger add
+         READ_PHONE_STATE; the camera plugin's WRITE_EXTERNAL_STORAGE implies
+         READ_EXTERNAL_STORAGE. Neither is needed for streaming frames. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+
+    <!-- The app still works without USB host (BLE/WiFi) or a camera (blocks,
+         voice, IMU), so don't hide it from those devices in app stores. -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <application
         android:label="do_robotics"
         android:name="${applicationName}"

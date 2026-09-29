@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'ui/dashboard_page.dart';
 import 'ui/vision_settings_page.dart';
 import 'services/actuator_service.dart';
+import 'services/app_lifecycle_guard.dart';
 import 'services/connectivity/connectivity_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ActuatorService().initialize();
   await ConnectivityManager().loadPreferences();
+  AppLifecycleGuard.instance.start();
   runApp(const NeuralApp());
 }
 

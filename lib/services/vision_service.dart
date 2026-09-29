@@ -53,11 +53,23 @@ class VisionService {
       SharedLease(open: _openCamera, close: _closeCamera);
   Future<void>? _initFuture;
 
+  /// Results older than this are treated as "nothing seen". Safety net for a
+  /// camera that silently stops delivering frames (app backgrounded, camera
+  /// taken by another app): without it the robot kept steering toward the
+  /// last target it saw.
+  static const Duration staleAfter = Duration(milliseconds: 1500);
+  @visibleForTesting
+  DateTime Function() clock = DateTime.now;
+  DateTime _lastResultAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastLineAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool get _fresh => clock().difference(_lastResultAt) < staleAfter;
+  bool get _lineFresh => clock().difference(_lastLineAt) < staleAfter;
+
   // Line detection state
   double _lineOffsetX = 0.0;
   bool _lineDetected = false;
-  double get lineOffsetX => _lineOffsetX;
-  bool get lineDetected => _lineDetected;
+  double get lineOffsetX => _lineFresh ? _lineOffsetX : 0.0;
+  bool get lineDetected => _lineDetected && _lineFresh;
   StreamSubscription? _prefSubscription;
   StreamSubscription? _settingsSubscription;
   StreamSubscription? _lineSub;
@@ -65,7 +77,7 @@ class VisionService {
 
   final ObjectDetectorService _detector = ObjectDetectorService();
 
-  bool get isObjectDetected => _lastDetections.isNotEmpty;
+  bool get isObjectDetected => _lastDetections.isNotEmpty && _fresh;
 
   // Active label filters (empty means all)
   List<String> _activeFilters = [];
@@ -76,29 +88,29 @@ class VisionService {
   int _lostFrames = 0;
   /// Frames a locked target may be missing before the lock is dropped.
   static const int lostFrameTolerance = 4;
-  bool get isLocked => _trackedObject != null;
-  DetectedObjectData? get trackedObject => _trackedObject;
+  bool get isLocked => _trackedObject != null && _fresh;
+  DetectedObjectData? get trackedObject => _fresh ? _trackedObject : null;
 
-  String get targetLabel => _trackedObject?.label ?? "None";
+  String get targetLabel => trackedObject?.label ?? "None";
 
   /// -1.0 (left) .. +1.0 (right), 0 = centred. Coordinates are already in
   /// physical phone-left/right space, so no sign flip is applied here.
   double get targetOffsetX {
-    final t = _trackedObject;
+    final t = trackedObject;
     if (t == null) return 0.0;
     return (t.boundingBox.center.dx - 0.5) * 2;
   }
 
   /// -1.0 (top) .. +1.0 (bottom).
   double get targetOffsetY {
-    final t = _trackedObject;
+    final t = trackedObject;
     if (t == null) return 0.0;
     return (t.boundingBox.center.dy - 0.5) * 2;
   }
 
   /// Tracked box area as a percentage (0..100) of the frame.
   double get targetArea {
-    final t = _trackedObject;
+    final t = trackedObject;
     if (t == null) return 0.0;
     final r = t.boundingBox;
     return (r.width * r.height) * 100.0;
@@ -119,7 +131,8 @@ class VisionService {
   }
 
   List<DetectedObjectData> _lastDetections = [];
-  List<DetectedObjectData> get lastDetections => List.unmodifiable(_lastDetections);
+  List<DetectedObjectData> get lastDetections =>
+      _fresh ? List.unmodifiable(_lastDetections) : const [];
 
   /// Lock on the detection closest to a tapped point (normalized coordinates).
   void lockOn(Rect touchRect) {
@@ -253,6 +266,7 @@ class VisionService {
 
       _lineSub?.cancel();
       _lineSub = _detector.lineResultsStream.listen((result) {
+        _lastLineAt = clock();
         _lineOffsetX = result.offsetX;
         _lineDetected = result.detected;
       });
@@ -268,7 +282,11 @@ class VisionService {
     }
   }
 
+  @visibleForTesting
+  void debugOnDetections(List<DetectionResult> results) => _onDetections(results);
+
   void _onDetections(List<DetectionResult> results) {
+    _lastResultAt = clock();
     final mapped = results
         .map((r) => DetectedObjectData(r.boundingBox, [r.label], r.score))
         .toList();
