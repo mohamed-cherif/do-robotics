@@ -8,9 +8,10 @@ RoboPython) is in git history.
 
 ## Next three months (summary)
 
-1. **Stabilize on hardware** — device checklist on real phones and boards,
-   firmware safety fixes (pin whitelist, TCP client handling, AVR servo
-   pool, pin 13), portrait lock + phone-mount setting, signed APK releases.
+1. **Stabilize on hardware** — device checklist on real phones and boards
+   (the firmware fixes and the portrait lock + phone-mount setting are
+   done, but not yet tried on hardware), per-board hotspot password, a
+   robot picker for rooms with several robots, signed APK releases.
 2. **Learning experience** — variables, accessibility pass, sharing
    programs (JSON/QR), live telemetry while running, phone benchmarks.
 3. **Capability** — sensor feedback from the board (distance, bumpers,

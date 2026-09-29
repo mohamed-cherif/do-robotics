@@ -88,9 +88,16 @@ the camera). Break this rule and the camera or mic stays on.
 → `ObjectDetectorService.processFrame` (throttled by the Performance
 setting, skipped while the isolate is busy) → background isolate:
 single-pass YUV→RGB + rotation + nearest-neighbour resize → TFLite
-(EfficientDet-Lite0, XNNPack) → boxes mapped to portrait display space →
-back to `VisionService`, which tracks the locked object (IoU + distance)
-and exposes `targetOffsetX/Y`, `targetArea`, `isLocked`. Results older than
+(EfficientDet-Lite0, XNNPack) → each box twice: `uprightBox` in the
+robot's frame and `boundingBox` in portrait display space → back to
+`VisionService`, which tracks the locked object (IoU + distance) and
+exposes `targetOffsetX/Y`, `targetArea`, `isLocked` from the upright box.
+
+The UI is locked to portrait. The phone may be mounted upright or upside
+down (`PhoneMount`: Automatic uses gravity via `MountDetector`, or fixed):
+upside down, the frame is rotated 180° more so the model always sees an
+upright picture, and only the overlay is turned back to match the screen.
+Steering values therefore never depend on the mount. Results older than
 1.5 s count as "nothing seen". In line-follow mode the isolate runs a Sobel
 detector on the luminance plane instead. Details and measurements:
 [MODELS.md](MODELS.md).
@@ -101,7 +108,11 @@ detector on the luminance plane instead. Details and measurements:
 (Bluetooth LE Nordic UART, USB serial at 115200, or WiFi TCP port 4210) and
 a `FrameParser` for bytes coming back. Every strategy sends a heartbeat
 every 500 ms; the firmware stops all outputs after 2 s of silence. Text
-frames (`0xAB`) carry WiFi setup and status. Protocol constants live only in
+frames (`0xAB`) carry WiFi setup and status, and the board's `ERR` /
+`WATCHDOG` messages, which `ConnectivityManager.logLineFor` puts in the
+program log. The sketches' logic is tested on the computer by
+`arduino/test/` (the `.ino` files compiled unchanged against small
+stand-ins for the Arduino, BLE and WiFi APIs). Protocol constants live only in
 `robot_protocol.dart` and must be mirrored in all three sketches.
 
 ## Persistence

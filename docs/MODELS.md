@@ -22,13 +22,16 @@ follower is classical image processing.
 
 1. Camera: `ResolutionPreset.low` (320×240 on most phones), YUV_420_888.
 2. `_directToTensor`: one pass that converts YUV→RGB (integer BT.601
-   limited-range formula), rotates by the sensor orientation and resizes
+   limited-range formula), rotates by the sensor orientation (plus 180°
+   when the phone is mounted upside down, so the model always sees an
+   upright picture) and resizes
    (nearest neighbour) to 320×320 — the 4:3 frame is squashed, as in the
    model's own training resize.
 3. Inference; outputs resolved by shape (boxes, count) and by value
    (class ids are integers) — see `resolveClassScoreRoles`.
-4. Threshold (default 0.35, user-adjustable), optional label filter, boxes
-   mapped to portrait display space.
+4. Threshold (default 0.35, user-adjustable), optional label filter. Each
+   box is kept upright (robot frame, used for steering) and mapped to
+   portrait display space (for the overlay).
 5. Tracking in `VisionService.associate` (IoU + distance), lock dropped
    after 4 missed frames, results older than 1.5 s ignored.
 

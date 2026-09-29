@@ -61,11 +61,18 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
       (regression: class/score outputs were swapped — everything was "person 1600%").
 - [ ] Lock Object Type [person] + Target X Offset: person on the robot's
       right → positive offset (portrait mount, camera forward).
-- [ ] **Upside-down mount** (setting on): record the sign of Target X Offset
-      for a person on the robot's right. Expected today: negative (screen
-      coordinates) — see "Needs decision" in docs/AUDIT_2026-09.md.
-- [ ] Line follower snippet with the phone in portrait: Line Offset X is
-      negative when the tape is on the left of the picture, positive on the right.
+- [ ] **Upside-down mount**, *Phone mounting: Automatic*: turn the phone
+      upside down in its holder (camera still forward). Within ~1 s boxes
+      line up with objects again and a person on the robot's right gives a
+      **positive** Target X Offset (robot coordinates, same as upright).
+- [ ] Same with the setting on *Upside down* (no waiting) and on *Upright*
+      (an upside-down phone now sees an upside-down picture: detection
+      gets worse — expected, the setting overrides the sensor).
+- [ ] Automatic: tilting the upright phone briefly (bumps, turning) does
+      not flip the picture.
+- [ ] Rotate the phone to landscape: the app stays in portrait.
+- [ ] Line follower snippet: Line Offset X is negative when the tape is on
+      the robot's left, positive on its right — upright and upside down.
 - [ ] Performance modes: Battery saver / Balanced / Fast change the HUD
       frame rate; note inference ms for each.
 - [ ] 10 minutes of Person Follower: note battery drop and whether the phone throttles (HUD ms rising).
@@ -83,7 +90,7 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
 
 ## 9. Lifecycle
 
-- [ ] Rotate the phone on the Blocks tab: no crash, no lost blocks.
+- [ ] Split screen / resize the window on the Blocks tab: no crash, no lost blocks.
 - [ ] Receive a call during a program: program stops; returning to the app works.
 - [ ] Open Camera, lock the phone, unlock: preview recovers.
 
@@ -92,3 +99,31 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
 - [ ] Drag a While block onto its own "do" slot: it is refused (regression: crash).
 - [ ] Clear All while running: STOP button remains.
 - [ ] Horizontal swipe on the palette scrolls instead of dragging a block.
+
+## 11. Firmware (ESP32 2.1, Uno/Mega 1.5)
+
+The firmware logic is covered by host tests (`arduino/test/run_tests.sh`);
+these checks cover what only real boards show.
+
+ESP32:
+
+- [ ] BLE name is `ESP32 Robot XXXX` and the hotspot `ESP32_Robot_XXXX` with
+      the same XXXX; two boards get different names.
+- [ ] Connect over BLE → the Home status shows **ESP32** (the board's HELLO
+      arrived); *Set up robot WiFi* says "esp32 (fw 2.1)".
+- [ ] Python `robot.pin.digital(6, 1)` → the board does **not** reboot; the
+      log shows "Robot: pin 6 can't be used on this board".
+- [ ] Same pin as servo, then as LED, then as PWM motor → each one works.
+- [ ] Over WiFi: turn phone WiFi off and on during a program, reconnect →
+      works at once; no burst of old commands afterwards.
+- [ ] Save home WiFi with a wrong password while a phone uses the hotspot →
+      the hotspot connection stays stable (no watchdog stops in the log).
+- [ ] *Set up robot WiFi* while connected over WiFi → refused ("use
+      Bluetooth or USB"); over BLE → works.
+
+Uno / Mega:
+
+- [ ] LED on pin 13 stays on (no flicker) while other commands are sent.
+- [ ] Servos on pins 12 and 13 (Uno) move; a 9th servo logs "too many servos".
+- [ ] After a servo has moved, a PWM motor on pin 9 (Uno) / 45 (Mega) logs
+      "no PWM once servos are used"; other PWM pins keep working.

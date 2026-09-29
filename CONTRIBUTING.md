@@ -22,7 +22,9 @@ understandable to a newcomer.**
    and speech recognition do not work in the emulator.
 
 Firmware lives in `arduino/` and is built with the Arduino IDE (see the
-README for board cores and library versions).
+README for board cores and library versions). `bash arduino/test/run_tests.sh`
+runs its logic on your computer (any C++17 compiler, no board); add a test
+there with every firmware change.
 
 ## Where things live
 
