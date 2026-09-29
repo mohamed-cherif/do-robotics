@@ -122,6 +122,9 @@ robot.servo("Arm").angle(45)
 ''');
     expect(out.first, "Left Wheel 5 ['Left Wheel', 'Right Wheel', 'Headlight', 'Arm']");
 
+    final (motorsOut, _) = await runRobot('import robot\nprint(robot.motors)\n');
+    expect(motorsOut.first, "['Left Wheel', 'Right Wheel']");
+
     await expectLater(
       runRobot('import robot\nrobot.motor("nope")\n'),
       throwsA(isA<PyRuntimeError>().having((e) => e.message, 'message', contains('Configured: "Left Wheel"'))),

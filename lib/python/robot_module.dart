@@ -104,6 +104,11 @@ PyObject buildRobotModule(RobotApi api, Interpreter interp, {void Function(Strin
   robot.method('switch', (a, _) => switchObj(find(argStr(a, 0, 'switch'), type: ActuatorType.switchPin)));
   robot.method('device', (a, _) => deviceObj(find(argStr(a, 0, 'device'))));
   robot.getter('actuators', () => PyList(api.actuators.map((a) => a.name).toList()));
+  // Motor names only, in configuration order (Smart Follow's left/right).
+  robot.getter('motors', () => PyList(api.actuators
+      .where((a) => a.type == ActuatorType.motor)
+      .map((a) => a.name)
+      .toList()));
   robot.getter('connected', () => api.connected);
 
   robot.method('say', (a, _) async {

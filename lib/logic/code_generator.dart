@@ -187,7 +187,8 @@ class _Gen {
     final sign = (block.inputValues['steering'] ?? 'NORMAL').toString() == 'REVERSED' ? '-' : '';
     final out = StringBuffer();
     out.writeln('$ind# Smart Follow ($mode): uses the first two motors as left / right');
-    out.writeln('${ind}left, right = robot.motor(robot.actuators[0]), robot.motor(robot.actuators[1])');
+    // Like the block runner: the first two *motors*, whatever else is configured.
+    out.writeln('${ind}left, right = robot.motor(robot.motors[0]), robot.motor(robot.motors[1])');
     out.writeln('${ind}search_dir = 1');
     out.writeln('${ind}while True:');
     out.writeln('${i1}if robot.vision.detected:');
