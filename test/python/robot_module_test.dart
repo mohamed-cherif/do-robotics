@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:do_robotics/logic/actuator_driver.dart';
 import 'package:do_robotics/logic/robot_api.dart';
@@ -110,6 +112,24 @@ Future<(List<String>, FakeRobotApi)> runRobot(String src) async {
 }
 
 void main() {
+  test('the Python example in README.md runs against the robot API', () async {
+    // Keeps the README honest: extract every ```python block and run it with
+    // a fake robot that sees a close person, so the sample's loop ends.
+    final readme = File('README.md').readAsStringSync();
+    final samples = RegExp(r'```python\n([\s\S]*?)```').allMatches(readme).map((m) => m.group(1)!).toList();
+    expect(samples, isNotEmpty);
+    for (final src in samples) {
+      final out = <String>[];
+      final api = FakeRobotApi()
+        ..detected = true
+        ..sz = 45;
+      final interp = Interpreter(onPrint: out.add);
+      interp.globals.vars['robot'] = buildRobotModule(api, interp, log: out.add);
+      await interp.run(src).timeout(const Duration(seconds: 5));
+      expect(api.calls, contains('say:Found you'));
+    }
+  });
+
   test('actuators resolve by name, case-insensitively, with helpful errors', () async {
     final (out, _) = await runRobot('''
 import robot
