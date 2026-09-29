@@ -32,7 +32,10 @@ class BlockFactory {
             'boat', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'apple', 'banana',
             'sandwich', 'chair', 'couch', 'potted plant', 'tv', 'laptop', 'mouse', 'remote',
             'keyboard', 'cell phone', 'microwave', 'oven', 'refrigerator', 'book', 'clock',
-            'vase', 'teddy bear', 'bottle', 'cup', 'fork', 'knife', 'spoon', 'bowl'
+            'vase', 'teddy bear', 'bottle', 'cup', 'fork', 'knife', 'spoon', 'bowl',
+            // Also detectable and listed in Vision Settings:
+            'sports ball', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase',
+            'orange', 'scissors', 'toothbrush',
           ],
           defaultValue: 'person',
         ),
@@ -353,6 +356,52 @@ class BlockFactory {
     );
   }
 
+  /// Runs its body over and over until the program is stopped.
+  static BlockDefinition foreverBlock() {
+    return BlockDefinition(
+      id: 'logic_forever',
+      label: 'Forever',
+      emoji: '♾️',
+      color: BlockColors.logic,
+      shape: BlockShape.statement,
+      category: 'Logic',
+      inputs: [
+        InputFieldDefinition(
+          id: 'do',
+          label: 'do',
+          type: InputFieldType.blockSocket,
+          acceptedBlockShape: BlockShape.statement,
+        ),
+      ],
+    );
+  }
+
+  /// Runs its body until the condition becomes true.
+  static BlockDefinition repeatUntilBlock() {
+    return BlockDefinition(
+      id: 'logic_repeat_until',
+      label: 'Repeat Until',
+      emoji: '🔂',
+      color: BlockColors.logic,
+      shape: BlockShape.statement,
+      category: 'Logic',
+      inputs: [
+        InputFieldDefinition(
+          id: 'condition',
+          label: '',
+          type: InputFieldType.blockSocket,
+          acceptedBlockShape: BlockShape.boolean,
+        ),
+        InputFieldDefinition(
+          id: 'do',
+          label: 'do',
+          type: InputFieldType.blockSocket,
+          acceptedBlockShape: BlockShape.statement,
+        ),
+      ],
+    );
+  }
+
   static BlockDefinition repeatBlock() {
     return BlockDefinition(
       id: 'logic_repeat',
@@ -641,6 +690,47 @@ class BlockFactory {
     );
   }
 
+  static BlockDefinition mathEqualsBlock() {
+    return BlockDefinition(
+      id: 'math_equals',
+      label: 'Equals =',
+      emoji: '🟰',
+      color: BlockColors.boolean,
+      shape: BlockShape.boolean,
+      category: 'Math',
+      inputs: [
+        InputFieldDefinition(
+          id: 'left',
+          label: '',
+          type: InputFieldType.blockSocket,
+          acceptedBlockShape: BlockShape.expression,
+        ),
+        InputFieldDefinition(
+          id: 'right',
+          label: '',
+          type: InputFieldType.blockSocket,
+          acceptedBlockShape: BlockShape.expression,
+        ),
+      ],
+    );
+  }
+
+  /// A random whole number between "from" and "to" (both included).
+  static BlockDefinition mathRandomBlock() {
+    return BlockDefinition(
+      id: 'math_random',
+      label: 'Random',
+      emoji: '🎲',
+      color: BlockColors.value,
+      shape: BlockShape.expression,
+      category: 'Math',
+      inputs: [
+        InputFieldDefinition(id: 'from', label: 'from', type: InputFieldType.number, defaultValue: 1),
+        InputFieldDefinition(id: 'to', label: 'to', type: InputFieldType.number, defaultValue: 10),
+      ],
+    );
+  }
+
   static BlockDefinition numberStaticBlock() {
     return BlockDefinition(
       id: 'math_number',
@@ -914,6 +1004,7 @@ class BlockFactory {
     return [
       objectDetectedBlock(),
       objectLockedBlock(),
+      targetLockedBlock(),
       targetOffsetXBlock(),
       targetOffsetYBlock(),
       targetSizeBlock(),
@@ -936,8 +1027,10 @@ class BlockFactory {
     return [
       ifBlock(),
       ifElseBlock(),
+      foreverBlock(),
       whileBlock(),
       repeatBlock(),
+      repeatUntilBlock(),
       waitBlock(),
       trueBlock(),
       falseBlock(),
@@ -962,12 +1055,14 @@ class BlockFactory {
   static List<BlockDefinition> getMathBlocks() {
     return [
       numberStaticBlock(),
+      mathRandomBlock(),
       mathAddBlock(),
       mathSubtractBlock(),
       mathMultiplyBlock(),
       mathDivideBlock(),
       mathLessThanBlock(),
       mathGreaterThanBlock(),
+      mathEqualsBlock(),
     ];
   }
 

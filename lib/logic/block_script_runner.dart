@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import '../models/block_models.dart';
 import '../models/actuator_config.dart';
 import '../services/vision_service.dart';
@@ -111,6 +112,7 @@ class BlockScriptRunner {
   final ActuatorService _actuatorService = ActuatorService();
   final ActuatorDriver _driver = ActuatorDriver();
   final ExecutionLogger _logger = ExecutionLogger();
+  final math.Random _random = math.Random();
 
   bool _visionStarted = false;
   bool _voiceStarted = false;
@@ -285,6 +287,19 @@ class BlockScriptRunner {
         }
         break;
 
+      case 'logic_forever':
+      case 'logic_repeat_until':
+        final until = blockId == 'logic_repeat_until' ? block.nestedBlocks['condition'] : null;
+        final doBlock = block.nestedBlocks['do'];
+        // Repeat Until with an empty condition repeats forever (as in Scratch).
+        while (run.active && !(until != null && _evaluateBoolean(until))) {
+          await _executeChain(doBlock, run);
+          if (!run.active) break;
+          // Yield so sensors/vision streams get CPU time between iterations.
+          await Future.delayed(const Duration(milliseconds: 20));
+        }
+        break;
+
       case 'logic_repeat':
         final times = ScriptUtils.toInt(block.inputValues['times'], 3).clamp(0, 10000);
         final doBlock = block.nestedBlocks['do'];
@@ -387,6 +402,8 @@ class BlockScriptRunner {
         return _numOrZero(block.nestedBlocks['left']) < _numOrZero(block.nestedBlocks['right']);
       case 'math_greater_than':
         return _numOrZero(block.nestedBlocks['left']) > _numOrZero(block.nestedBlocks['right']);
+      case 'math_equals':
+        return (_numOrZero(block.nestedBlocks['left']) - _numOrZero(block.nestedBlocks['right'])).abs() < 1e-9;
       default:
         return false;
     }
@@ -414,6 +431,11 @@ class BlockScriptRunner {
         return _sensorService.compassHeading;
       case 'math_number':
         return ScriptUtils.toDouble(block.inputValues['value'], 0.0);
+      case 'math_random':
+        var lo = ScriptUtils.toInt(block.inputValues['from'], 1);
+        var hi = ScriptUtils.toInt(block.inputValues['to'], 10);
+        if (lo > hi) (lo, hi) = (hi, lo);
+        return (lo + _random.nextInt(hi - lo + 1)).toDouble();
       case 'math_add':
         return _numOrZero(block.nestedBlocks['left']) + _numOrZero(block.nestedBlocks['right']);
       case 'math_subtract':

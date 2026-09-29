@@ -82,4 +82,50 @@ void main() {
     await run.timeout(const Duration(seconds: 5));
     expect(runner.state, ExecutionState.idle);
   });
+
+  group('new blocks', () {
+    BlockInstance number(num v) => block('math_number', inputs: {'value': v});
+
+    test('Repeat Until stops as soon as the condition is true', () async {
+      runner.loadScript([
+        block('logic_repeat_until', nested: {'condition': block('bool_true'), 'do': print(1)}, next: print(2)),
+      ]);
+      await runner.play();
+      expect(printed(), ['2.00']);
+    });
+
+    test('Forever repeats until Stop Program', () async {
+      runner.loadScript([
+        block('logic_forever', nested: {'do': print(1, next: block('logic_stop'))}),
+      ]);
+      await runner.play().timeout(const Duration(seconds: 5));
+      expect(printed(), ['1.00']);
+    });
+
+    test('Equals compares numbers', () async {
+      BlockInstance ifEq(num a, num b, int out) => block('logic_if', nested: {
+            'condition': block('math_equals', nested: {'left': number(a), 'right': number(b)}),
+            'then': print(out),
+          });
+      runner.loadScript([ifEq(2, 2, 1)..nextBlock = ifEq(2, 3, 2)]);
+      await runner.play();
+      expect(printed(), ['1.00']);
+    });
+
+    test('Random stays inside its range (either order)', () async {
+      BlockInstance printRandom(int from, int to) => block('act_print', nested: {
+            'value': block('math_random', inputs: {'from': from, 'to': to}),
+          });
+      runner.loadScript([
+        block('logic_repeat', inputs: {'times': 30}, nested: {
+          'do': printRandom(3, 7)..nextBlock = printRandom(9, 9),
+        }),
+      ]);
+      await runner.play();
+      final values = printed().map(double.parse).toList();
+      expect(values, hasLength(60));
+      expect(values.where((v) => v != 9), everyElement(inInclusiveRange(3, 7)));
+      expect(values.where((v) => v == 9), hasLength(30));
+    });
+  });
 }

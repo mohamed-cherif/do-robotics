@@ -227,4 +227,26 @@ void main() {
       expect(BlockInstance.listFromJson(json, defs).single.inputValues['value'], 90);
     });
   });
+
+  group('CodeGenerator: new blocks', () {
+    test('Forever, Repeat Until, Equals and Random convert to valid Python', () {
+      BlockInstance b(String id, {Map<String, dynamic>? inputs, Map<String, BlockInstance?>? nested}) =>
+          BlockInstance(instanceId: id, definition: def(id), inputValues: inputs, nestedBlocks: nested);
+      final code = CodeGenerator.generateCode([
+        b('logic_forever', nested: {
+          'do': b('logic_repeat_until', nested: {
+            'condition': b('math_equals', nested: {
+              'left': b('math_random', inputs: {'from': 1, 'to': 6}),
+              'right': b('math_number', inputs: {'value': 6}),
+            }),
+            'do': b('logic_wait', inputs: {'seconds': 0.1}),
+          }),
+        }),
+      ]);
+      expect(code, startsWith('import random\nimport robot\n'));
+      expect(code, contains('while True:'));
+      expect(code, contains('while not (random.randint(1, 6) == 6):'));
+      expect(Parser.parse(code), isNotNull);
+    });
+  });
 }

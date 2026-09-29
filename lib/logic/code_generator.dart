@@ -14,6 +14,7 @@ class _Gen {
   final Map<String, String> _varForActuator = {}; // block id prefix → variable name
   final Set<String> _usedVars = {};
   final List<String> _declarations = [];
+  final Set<String> _imports = {'robot'};
   _Gen(this.script);
 
   String generate() {
@@ -23,7 +24,9 @@ class _Gen {
       body.writeln();
     }
     final out = StringBuffer();
-    out.writeln("import robot");
+    for (final m in _imports.toList()..sort()) {
+      out.writeln("import $m");
+    }
     if (_declarations.isNotEmpty) {
       out.writeln();
       for (final d in _declarations) {
@@ -114,6 +117,17 @@ class _Gen {
         if (block.nestedBlocks['do'] != null) {
           out.writeln('${_ind(level + 1)}robot.wait(0.02)');
         }
+        break;
+      case 'logic_forever':
+        out.writeln('${ind}while True:');
+        out.write(_body(block.nestedBlocks['do'], level + 1));
+        out.writeln('${_ind(level + 1)}robot.wait(0.02)');
+        break;
+      case 'logic_repeat_until':
+        final cond = block.nestedBlocks['condition'];
+        out.writeln(cond == null ? '${ind}while True:' : '${ind}while not ${_bool(cond)}:');
+        out.write(_body(block.nestedBlocks['do'], level + 1));
+        out.writeln('${_ind(level + 1)}robot.wait(0.02)');
         break;
       case 'logic_repeat':
         out.writeln('${ind}for i in range(${_numLit(block.inputValues['times'], 3)}):');
@@ -266,6 +280,8 @@ class _Gen {
         return '${_expr(block.nestedBlocks['left'])} < ${_expr(block.nestedBlocks['right'])}';
       case 'math_greater_than':
         return '${_expr(block.nestedBlocks['left'])} > ${_expr(block.nestedBlocks['right'])}';
+      case 'math_equals':
+        return '(${_expr(block.nestedBlocks['left'])} == ${_expr(block.nestedBlocks['right'])})';
       default:
         return 'False';
     }
@@ -292,6 +308,9 @@ class _Gen {
         return 'robot.compass.heading';
       case 'math_number':
         return _numLit(block.inputValues['value'], 0);
+      case 'math_random':
+        _imports.add('random');
+        return 'random.randint(${_numLit(block.inputValues['from'], 1)}, ${_numLit(block.inputValues['to'], 10)})';
       case 'math_add':
         return '(${_expr(block.nestedBlocks['left'])} + ${_expr(block.nestedBlocks['right'])})';
       case 'math_subtract':
