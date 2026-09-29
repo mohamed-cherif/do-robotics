@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/block_models.dart';
 import '../models/block_factory.dart';
@@ -10,6 +11,8 @@ import 'block_widgets/statement_block.dart';
 import 'block_widgets/boolean_block.dart';
 import 'execution_log_viewer.dart';
 import '../logic/code_generator.dart';
+import '../logic/script_validator.dart';
+import '../services/connectivity/connectivity_manager.dart';
 import '../services/script_save_service.dart';
 import 'python_bus.dart';
 
@@ -43,6 +46,15 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
   StreamSubscription? _runnerStateSub;
   StreamSubscription? _runnerBlockSub;
 
+  // Undo/redo history of canvas snapshots (JSON), and the autosaved draft
+  // that restores the canvas after the app is closed or killed.
+  static const String _draftKey = 'blocks_draft';
+  static const int _maxHistory = 50;
+  final List<String> _history = [];
+  int _historyIndex = -1;
+  Timer? _draftTimer;
+  Timer? _inputSnapshotTimer;
+
   List<BlockDefinition> _sensorBlocks = [];
   List<BlockDefinition> _logicBlocks = [];
   List<BlockDefinition> _mathBlocks = [];
@@ -68,6 +80,7 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
 
     _loadBlocks();
     _actuatorsSub = _actuatorService.actuatorsStream.listen((_) => _loadBlocks());
+    _restoreDraft();
 
     _runnerStateSub = _runner.stateStream.listen((state) {
       if (mounted) setState(() => _executionState = state);
@@ -80,6 +93,11 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
 
   @override
   void dispose() {
+    _inputSnapshotTimer?.cancel();
+    if (_draftTimer?.isActive ?? false) {
+      _draftTimer!.cancel();
+      _saveDraft(_currentJson);
+    }
     _actuatorsSub?.cancel();
     _runnerStateSub?.cancel();
     _runnerBlockSub?.cancel();
@@ -108,6 +126,94 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
         _actuatorBlocks.add(BlockFactory.smartFollowBlock());
       }
     });
+  }
+
+  // ── Undo / redo / draft ─────────────────────────────────────────────────────
+
+  String get _currentJson => BlockInstance.listToJson(_script);
+  bool get _canUndo => _historyIndex > 0;
+  bool get _canRedo => _historyIndex >= 0 && _historyIndex < _history.length - 1;
+
+  /// Records the canvas if it changed since the last snapshot. Called after
+  /// every gesture on the page (drags end with a pointer-up), after field
+  /// edits (debounced) and after load / clear / snippet.
+  void _snapshot() {
+    if (!mounted || _historyIndex < 0) return;
+    final json = _currentJson;
+    if (_history[_historyIndex] == json) return;
+    _history.removeRange(_historyIndex + 1, _history.length);
+    _history.add(json);
+    if (_history.length > _maxHistory) _history.removeAt(0);
+    _historyIndex = _history.length - 1;
+    _scheduleDraftSave();
+    setState(() {}); // refresh the undo/redo buttons
+  }
+
+  void _scheduleInputSnapshot() {
+    _inputSnapshotTimer?.cancel();
+    _inputSnapshotTimer = Timer(const Duration(milliseconds: 700), _snapshot);
+  }
+
+  void _restoreSnapshot(String json) {
+    final report = BlockInstance.loadScript(json, _loadDefinitions);
+    setState(() {
+      _script
+        ..clear()
+        ..addAll(report.blocks);
+    });
+    _scheduleDraftSave();
+  }
+
+  void _undo() {
+    if (!_canUndo) return;
+    _historyIndex--;
+    _restoreSnapshot(_history[_historyIndex]);
+  }
+
+  void _redo() {
+    if (!_canRedo) return;
+    _historyIndex++;
+    _restoreSnapshot(_history[_historyIndex]);
+  }
+
+  void _scheduleDraftSave() {
+    _draftTimer?.cancel();
+    _draftTimer = Timer(const Duration(milliseconds: 800), () => _saveDraft(_currentJson));
+  }
+
+  Future<void> _saveDraft(String json) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_draftKey, json);
+  }
+
+  Future<void> _restoreDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+    final json = prefs.getString(_draftKey);
+    if (!mounted) return;
+    if (json != null && _script.isEmpty) {
+      final report = BlockInstance.loadScript(json, _loadDefinitions);
+      if (report.blocks.isNotEmpty) setState(() => _script.addAll(report.blocks));
+    }
+    _history
+      ..clear()
+      ..add(_currentJson);
+    _historyIndex = 0;
+    if (mounted) setState(() {});
+  }
+
+  /// Replaces the canvas and offers a one-tap undo instead of a confirmation.
+  void _replaceCanvas(List<BlockInstance> blocks, String message) {
+    setState(() {
+      _script
+        ..clear()
+        ..addAll(blocks);
+    });
+    _snapshot();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      duration: const Duration(seconds: 4),
+      action: _canUndo ? SnackBarAction(label: 'UNDO', onPressed: _undo) : null,
+    ));
   }
 
   // ── Save / Load ────────────────────────────────────────────────────────────
@@ -210,15 +316,12 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
                             'that were removed in Configure Hardware.')));
                     return;
                   }
-                  setState(() {
-                    _script.clear();
-                    _script.addAll(report.blocks);
-                  });
-                  if (report.skipped > 0) {
-                    messenger.showSnackBar(SnackBar(
-                        content: Text('Loaded. ${report.skipped} block(s) were left out because '
-                            'their device no longer exists in Configure Hardware.')));
-                  }
+                  _replaceCanvas(
+                      report.blocks,
+                      report.skipped > 0
+                          ? 'Loaded "$name". ${report.skipped} block(s) were left out because '
+                              'their device no longer exists in Configure Hardware.'
+                          : 'Loaded "$name".');
                 },
               );
             },
@@ -1058,17 +1161,8 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
                                 ElevatedButton(
                                   onPressed: () {
                                     final blocks = (s['build'] as List<BlockInstance> Function())();
-                                    setState(() {
-                                      _script.clear();
-                                      _script.addAll(blocks);
-                                    });
                                     Navigator.pop(ctx);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('Snippet loaded \u{2713}'),
-                                        duration: Duration(seconds: 2),
-                                      ),
-                                    );
+                                    _replaceCanvas(blocks, 'Snippet loaded \u{2713}');
                                   },
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(0xFF6366F1),
@@ -1116,13 +1210,20 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       body: SafeArea(
-        child: Column(
+        child: Listener(
+          // Every edit ends with a pointer-up (drag & drop, trash, taps);
+          // record the result for undo/redo and the autosaved draft. Drops
+          // are applied after this listener sees the event, so snapshot once
+          // the current event has been fully processed.
+          onPointerUp: (_) => Timer.run(_snapshot),
+          child: Column(
           children: [
             _buildHeader(),
             _buildTabBar(),
             _buildBlockPalette(),
             Expanded(child: _buildCanvas()),
           ],
+        ),
         ),
       ),
       // Keep STOP reachable while running, even if the canvas was cleared.
@@ -1135,6 +1236,7 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
   Widget _buildHeader() {
     final isRunning = _executionState == ExecutionState.running;
     final blockCount = _script.length;
+    final narrow = MediaQuery.sizeOf(context).width < 420;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1150,8 +1252,8 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
       ),
       child: Row(
         children: [
-          // Gradient icon
-          Container(
+          // Gradient icon (hidden on narrow phones to leave room for the title)
+          if (!narrow) Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
@@ -1161,7 +1263,7 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
             ),
             child: const Icon(Icons.extension, color: Colors.white, size: 20),
           ),
-          const SizedBox(width: 12),
+          if (!narrow) const SizedBox(width: 12),
           // Title + subtitle
           Expanded(
             child: Column(
@@ -1195,7 +1297,14 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
               ],
             ),
           ),
-          // Snippets chip button
+          // Snippets
+          if (narrow)
+            IconButton(
+              onPressed: _showSnippetsSheet,
+              icon: const Icon(Icons.bolt, color: Color(0xFF6366F1)),
+              tooltip: 'Snippets',
+            )
+          else
           ActionChip(
             avatar: const Icon(Icons.bolt, size: 16, color: Color(0xFF6366F1)),
             label: const Text('Snippets'),
@@ -1209,18 +1318,16 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             onPressed: _showSnippetsSheet,
           ),
-          const SizedBox(width: 6),
-          // Save
+          const SizedBox(width: 2),
           IconButton(
-            onPressed: _showSaveDialog,
-            icon: const Icon(Icons.save_outlined, size: 20),
-            tooltip: 'Save Script',
+            onPressed: _canUndo ? _undo : null,
+            icon: const Icon(Icons.undo, size: 20),
+            tooltip: 'Undo',
           ),
-          // Load
           IconButton(
-            onPressed: _showLoadDialog,
-            icon: const Icon(Icons.folder_open_outlined, size: 20),
-            tooltip: 'Load Script',
+            onPressed: _canRedo ? _redo : null,
+            icon: const Icon(Icons.redo, size: 20),
+            tooltip: 'Redo',
           ),
           // Popup menu for secondary actions
           PopupMenuButton<String>(
@@ -1229,7 +1336,13 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
             onSelected: (value) {
               switch (value) {
                 case 'clear':
-                  setState(() => _script.clear());
+                  _replaceCanvas([], 'Canvas cleared');
+                  break;
+                case 'save':
+                  _showSaveDialog();
+                  break;
+                case 'load':
+                  _showLoadDialog();
                   break;
                 case 'reset_view':
                   _transformController.value = Matrix4.identity();
@@ -1247,6 +1360,24 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
               }
             },
             itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'save',
+                child: ListTile(
+                  leading: Icon(Icons.save_outlined),
+                  title: Text('Save Script'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'load',
+                child: ListTile(
+                  leading: Icon(Icons.folder_open_outlined),
+                  title: Text('Load Script'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
               const PopupMenuItem(
                 value: 'clear',
                 child: ListTile(
@@ -1518,10 +1649,12 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
          isPreview: isPreview,
          onBlockDragStarted: isPreview ? null : () => setState(() => _isDraggingBlock = true),
          onBlockDragEnd: isPreview ? null : () => setState(() => _isDraggingBlock = false),
+         // The edited block has already stored its own value; this callback
+         // is also called for nested/chained blocks, so it must not write into
+         // the root block (that overwrote e.g. the first Wait of a chain).
          onInputChanged: (fieldId, value) {
-           setState(() {
-             block.inputValues[fieldId] = value;
-           });
+           setState(() {});
+           _scheduleInputSnapshot();
          },
        );
      }
@@ -1536,11 +1669,63 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
        onBlockDragStarted: isPreview ? null : () => setState(() => _isDraggingBlock = true),
        onBlockDragEnd: isPreview ? null : () => setState(() => _isDraggingBlock = false),
        onInputChanged: (fieldId, value) {
-         setState(() {
-           block.inputValues[fieldId] = value;
-         });
+         setState(() {});
+         _scheduleInputSnapshot();
        },
      );
+  }
+
+  /// Shows beginner-friendly warnings (empty conditions, removed devices,
+  /// robot not connected...) before running; the user can run anyway.
+  Future<void> _checkAndRun() async {
+    final roots = sortedRoots;
+    final issues = ScriptValidator.validate(
+      roots,
+      actuators: _actuatorService.actuators,
+      robotConnected: ConnectivityManager().isConnected,
+    );
+    if (issues.isNotEmpty) {
+      final run = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Before you run…'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final issue in issues)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          issue.level == IssueLevel.problem ? Icons.error_outline : Icons.info_outline,
+                          size: 20,
+                          color: issue.level == IssueLevel.problem ? Colors.red : Colors.blueGrey,
+                          semanticLabel: issue.level == IssueLevel.problem ? 'Problem' : 'Hint',
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(issue.message)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Fix it')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Run anyway')),
+          ],
+        ),
+      );
+      if (run != true || !mounted) return;
+    }
+    // Flatten the script from roots (sorted by Y)
+    _runningRoots = roots;
+    _runner.loadScript(_runningRoots);
+    _runner.play();
   }
 
   Widget _buildPlayButton() {
@@ -1551,10 +1736,7 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
         if (isRunning) {
           _runner.stop();
         } else {
-          // Flatten the script from roots (sorted by Y)
-          _runningRoots = sortedRoots;
-          _runner.loadScript(_runningRoots);
-          _runner.play();
+          _checkAndRun();
         }
       },
       backgroundColor: isRunning ? Colors.red : const Color(0xFF10B981),
