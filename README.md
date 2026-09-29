@@ -1,30 +1,110 @@
 # DO Robotics — your phone is the robot's brain
 
-A Flutter app that turns an Android/iOS phone into the controller for a
-hobby robot. The phone supplies the expensive parts (camera + object
-detection, microphone + speech recognition, IMU, compass, speaker, battery,
-radios) and a cheap microcontroller (ESP32, Arduino Uno/Mega) does nothing but
-drive pins. Programs are written as drag-and-drop **blocks** or as **Python**
-and run on the phone.
+DO Robotics turns an Android phone into the brain of a hobby robot, for
+learning and experimenting. The phone supplies the expensive parts —
+camera + object detection, microphone + speech recognition, motion sensors,
+compass, speaker, battery and radios — and a cheap microcontroller (ESP32,
+Arduino Uno or Mega) just drives the motors, servos and LEDs. You program
+the robot on the phone with drag-and-drop **blocks** (like Scratch) or in
+**Python**.
+
+<!-- TODO(screenshot): Home tab, Blocks editor with a Person Follower program, camera view with a locked person. -->
 
 ```
 ┌────────────── phone (this app) ──────────────┐        ┌── controller ──┐
-│ camera → TFLite EfficientDet-Lite0 → track   │  BLE   │ ESP32 / Uno /  │
+│ camera → EfficientDet-Lite0 (TFLite) → track │  BLE   │ ESP32 / Uno /  │
 │ mic    → speech-to-text / loudness           │  USB   │ Mega running   │
-│ IMU    → tilt / shake / yaw / compass        │◀─WiFi─▶│ arduino/*.ino  │
-│ blocks → BlockScriptRunner                   │ framed │ motors, servos │
-│ python → RoboPython interpreter (lib/python) │ bytes  │ LEDs, buzzers  │
-│ TTS    → "Say" block / robot.say()           │        │ WiFi + mDNS    │
+│ IMU    → tilt / shake / turn rate / compass  │◀─WiFi─▶│ arduino/*.ino  │
+│ blocks → BlockScriptRunner                   │ 5-byte │ motors, servos │
+│ python → RoboPython interpreter              │ packets│ LEDs, buzzers  │
+│ TTS    → "Say" block / robot.say()           │        │ 2 s watchdog   │
 └──────────────────────────────────────────────┘        └────────────────┘
 ```
 
-## Python
+> **Status:** pre-release. Android is the supported platform (Android 7.0+,
+> built and tested with Flutter 3.38.5). iOS builds are not tested yet — see
+> [docs/APPLE_FEASIBILITY.md](docs/APPLE_FEASIBILITY.md).
 
-The **Python** tab runs a Python subset ("RoboPython") interpreted on the
-phone: ints/floats/strings/lists/dicts, `if/elif/else`, `while`, `for … in
-range()`, `def`, f-strings, `time`, `math`, `random`. No classes, no
-`try/except`, no third-party imports. Blocks convert to Python with
-**Blocks → ⋮ → Convert to Python**.
+## Quick start (≈ 10 minutes)
+
+You need: an Android phone (USB debugging enabled), a computer with
+[Flutter 3.38](https://docs.flutter.dev/get-started/install) and the
+[Arduino IDE 2](https://www.arduino.cc/en/software), and one of the boards
+below with a USB cable.
+
+**1. Flash the robot board** (Arduino IDE)
+
+| Board | Sketch | Arduino IDE setup | Links |
+|---|---|---|---|
+| **ESP32 DevKit** (recommended) | `arduino/receiver/receiver.ino` | Boards Manager: **esp32 by Espressif, 3.x** (2.x does not compile). Library Manager: **ESP32Servo ≥ 3.0**. Board "ESP32 Dev Module", Tools › Partition Scheme **"Huge APP (3MB No OTA)"**. | Bluetooth, WiFi, USB |
+| Arduino Uno | `arduino/receiver_uno/receiver_uno.ino` | Arduino AVR Boards, built-in Servo library | USB only |
+| Arduino Mega | `arduino/receiver_mega/receiver_mega.ino` | same as Uno | USB only |
+
+**2. Install the app** on the phone:
+
+```
+git clone <this repo> && cd do_robotics
+flutter pub get
+flutter run --release        # phone connected over USB
+```
+
+The camera, Bluetooth, USB and speech recognition need a real phone; the
+emulator can only show the UI.
+
+**3. Connect.** On the **Home** tab tap the header ("SYSTEM OFFLINE") and
+choose **Bluetooth** (ESP32 — it advertises as *ESP32 Robot*) or **USB
+Serial (OTG)** (any board, via an OTG adapter). Accept the permission
+prompts. The header turns green: *SYSTEM ONLINE*.
+
+**4. Tell the app what's wired.** Home › **Configure Hardware** › Add
+Actuator: e.g. an LED on pin 2 (the ESP32's built-in LED) or pin 12
+(Uno/Mega — avoid pin 13, the firmware blinks it on every command).
+
+**5. Run something.** Home › Featured Tutorials › **Connect & Hello LED**,
+or Blocks › ⚡ Snippets. Press **RUN** (bottom right) and **STOP** to end.
+
+> **Safety:** put wheeled robots on a stand for the first run. STOP stops
+> all outputs; the firmware also stops everything if it hears nothing from
+> the phone for 2 seconds, and programs stop when the app leaves the screen.
+
+### WiFi (ESP32 only)
+
+The ESP32 also opens a hotspot `ESP32_Robot` (password `12345678` —
+change `WIFI_PASS` in the sketch before using it around other people). To
+put the robot on your home WiFi: connect over Bluetooth or USB first, then
+header menu › **Set up robot WiFi**. Afterwards use header › **WiFi** ›
+**Find robot** (mDNS `robot.local`), or type the IP address.
+
+## Programming
+
+### Blocks
+
+Drag blocks from the palette onto the canvas; separate stacks run top to
+bottom. Undo/redo are in the header; **⋮** has Save, Load, View Logs and
+Convert to Python. Before running, the editor points out common mistakes
+(an If with no condition, a device that was removed, the robot not
+connected).
+
+- **Sensors:** Object Detected, Lock Object Type, Object Locked, Target X/Y
+  Offset, Target Size %, Line Visible / Line Offset X, Phone Shaking /
+  Tilted / Spinning, Tilt Pitch/Roll, Rotation Rate, Compass Heading /
+  Facing, Loud Noise, Heard *phrase*.
+- **Logic:** If, If/Else, Forever, While, Repeat, Repeat Until, Wait,
+  True/False, And/Or/Not, Print, Say, Stop Program, Expression.
+- **Math:** Number, Random, + − × ÷, Less Than, Greater Than, Equals.
+- **Devices:** one block per configured device (LED, motor, positional or
+  continuous servo, buzzer, switch), *Track X* for servos, and **Smart
+  Follow** (a ready-made follow/fetch controller for two-motor robots).
+
+### Python
+
+The **Python** tab runs "RoboPython", a Python subset interpreted on the
+phone: numbers, strings, lists, dicts, tuples, `if/elif/else`, `while`,
+`for`, `def`, recursion (up to 1000 calls), f-strings, slicing, and the
+`time`, `math`, `random` modules. Not supported: classes, `try/except`,
+comprehensions, other imports. Blocks convert to Python with **Blocks › ⋮ ›
+Convert to Python**; the full API is in the Python tab under **⋮ › API
+reference**.
 
 ```python
 import robot
@@ -46,8 +126,6 @@ while True:
     robot.wait(0.02)
 ```
 
-API summary (full reference in the app under ⋮ → API reference):
-
 | Object | Members |
 |---|---|
 | `robot.motor(name)` | `.forward(speed)`, `.backward(speed)`, `.stop()`, `.speed(±v)` |
@@ -57,25 +135,31 @@ API summary (full reference in the app under ⋮ → API reference):
 | `robot.imu` | `.pitch`, `.roll`, `.yaw_rate`, `.shaking`, `.tilted`, `.spinning` |
 | `robot.compass` | `.heading`, `.facing("North" \| degrees)` |
 | `robot.mic` | `.loud`, `.heard(phrase)`, `.words` |
-| `robot` | `.say(text)`, `.wait(s)`, `.stop_all()`, `.stop()`, `.log(...)`, `.connected`, `.actuators`, `.pin.digital/pwm/servo(pin, v)` |
+| `robot` | `.say(text)`, `.wait(s)`, `.stop_all()`, `.stop()`, `.log(...)`, `.connected`, `.actuators`, `.motors`, `.pin.digital/pwm/servo(pin, v)` |
 
-## Quick start
+## Sensors, the phone mount, and the camera
 
-1. Flash one of the sketches in `arduino/` (`receiver` for ESP32, `receiver_uno`,
-   `receiver_mega`). The ESP32 advertises as **ESP32 Robot** over BLE and also
-   opens a WiFi AP `ESP32_Robot` / `12345678` with a TCP server on `192.168.4.1:4210`.
-2. `flutter pub get && flutter run` on a physical phone (camera/BLE do not work
-   in emulators).
-3. Home → **Configure Hardware**: add your motors (PWM pin + IN1/IN2), servos, LEDs.
-4. Code tab → **Snippets** → load *Motor Forward Test*, press RUN.
+- Mount the phone **upright (portrait), back camera facing forward** — the
+  vision, compass (direction the camera faces) and turn-rate readings are
+  designed for that. A phone lying flat also works for compass and tilt.
+- Object detection uses **EfficientDet-Lite0** (80 everyday COCO objects,
+  e.g. person, cup, bottle, sports ball — no faces). Accuracy, speed and
+  limitations: [docs/MODELS.md](docs/MODELS.md).
+- Camera settings (objects to look for, confidence, upside-down mount,
+  **Performance**: Battery saver / Balanced / Fast) are under Home ›
+  Configure Sensors › Camera › ⚙.
+- Speech recognition uses the phone's system recognizer, which may send
+  audio to its provider (usually Google) unless an offline language pack is
+  installed.
 
 ## Wire protocol
 
-Every transport sends the same 5-byte packet, defined once in
+Every transport carries the same bytes, defined in
 `lib/services/connectivity/robot_protocol.dart` and mirrored in each sketch:
 
 ```
-[0xAA][CMD][PIN][VALUE][CHECKSUM]     CHECKSUM = (0xAA + CMD + PIN + VALUE) % 256
+control  [0xAA][CMD][PIN][VALUE][CHECKSUM]   CHECKSUM = (0xAA + CMD + PIN + VALUE) % 256
+text     [0xAB][LEN][LEN bytes][CHECKSUM]     CHECKSUM = sum of all preceding bytes % 256
 ```
 
 | CMD  | Name           | VALUE                                           |
@@ -86,91 +170,52 @@ Every transport sends the same 5-byte packet, defined once in
 | 0x03 | PIN_MODE       | 0 = INPUT, 1 = OUTPUT, 2 = INPUT_PULLUP          |
 | 0x04 | SERVO_WRITE    | angle 0–180                                     |
 | 0x05 | SERVO_WRITE_US | continuous servo, (µs − 1300) / 2 → 100 = stop  |
-| 0x06 | STOP_ALL       | ignored — every driven pin LOW, servos to 1500 µs |
+| 0x06 | STOP_ALL       | driven pins LOW, continuous servos to 1500 µs; positional servos hold their angle |
+
+Text frames (ESP32 only; Uno/Mega answer `ERR\tunsupported`): phone → board
+`WIFI\t<ssid>\t<password>`, `NAME\t<hostname>`, `STATUS`, `FORGET`; board →
+phone `HELLO`, `WIFI\t…`, `STATUS\t…`, `OK`/`ERR`, `WATCHDOG\tlink lost`.
 
 **Failsafe:** the firmware stops every output it has driven if no packet
-arrives for 2 s (link loss, app crash, phone out of range), on BLE disconnect,
-and when the WiFi client drops. The app also sends STOP_ALL when a program halts.
+arrives for 2 s, on BLE disconnect and when the WiFi client drops.
 
-**Text frames** share the same byte stream in both directions and carry
-configuration and status (`lib/services/connectivity/frame_parser.dart`):
+### Pins to avoid
 
-```
-[0xAB][LEN][LEN bytes of tab-separated text][CHECKSUM]   CHECKSUM = sum of all preceding bytes % 256
-```
+- **ESP32:** 6–11 (flash — using them crashes the board), 1/3 (USB serial),
+  34–39 are input-only; strapping pins 0, 2, 5, 12, 15 must not be pulled
+  the wrong way at boot.
+- **Uno/Mega:** 0/1 (USB serial), 13 (activity LED). On the Uno, attaching
+  any servo disables PWM on pins 9 and 10.
 
-| phone → board | board → phone |
+## Documentation
+
+| Document | For |
 |---|---|
-| `WIFI\t<ssid>\t<password>` join a network (saved in NVS) | `HELLO\tesp32\t2.0` on connect |
-| `NAME\t<hostname>` mDNS / BLE name | `WIFI\tCONNECTED\t<ip>` / `WIFI\tFAILED\t<why>` / `WIFI\tAP\t192.168.4.1` |
-| `STATUS` | `STATUS\tsta=…\tip=…\tap=…\tname=…\tble=…\tuptime=…` |
-| `FORGET` erase credentials | `OK\t…` / `ERR\t…` / `WATCHDOG\tlink lost` |
-
-Uno/Mega answer every text command with `ERR\tunsupported`.
-
-### ESP32 wireless setup
-
-1. Flash `arduino/receiver/receiver.ino`. The board advertises **ESP32 Robot**
-   over Bluetooth and starts the hotspot `ESP32_Robot` (password `12345678`).
-2. In the app, connect over **Bluetooth** (or USB), then open the connection
-   menu → **Set up robot WiFi** and enter your home network. The board joins it,
-   announces itself as `robot.local`, and reports its IP.
-3. From then on choose **WiFi → Find robot** (mDNS) or type `robot.local`.
-   The hotspot keeps working as a fallback at `192.168.4.1:4210`.
-
-Bluetooth reconnects automatically (5 attempts, 2 s apart) after a drop.
-
-## Project layout
-
-| Path | What lives there |
-|------|------------------|
-| `lib/logic/block_script_runner.dart` | Block interpreter. Evaluates conditions, drives actuators, runs the Smart Follow controller. `ScriptUtils` holds the pure helpers (voice matching, tree scans). |
-| `lib/python/` | RoboPython: `lexer`, `parser`, `interpreter` (async, cancellable), `builtins`, `robot_module` (the `robot` API over `RobotApi`). |
-| `lib/logic/python_script_runner.dart` | Runs Python with the block runner's lifecycle (start subsystems, stop-all, release camera/mic). |
-| `lib/logic/robot_api.dart`, `actuator_driver.dart` | `RobotApi` facade (fakeable in tests) and the shared motor/servo/LED driver with per-pin de-duplication. |
-| `lib/services/voice_service.dart` | Speech recognition with auto-restart, loudness, text-to-speech. |
-| `lib/ui/python_page.dart` | Python editor with highlighting, line numbers, console, examples. |
-| `lib/models/block_factory.dart` | Every block definition (sensors, logic, math, per-actuator blocks). |
-| `lib/models/block_models.dart` | `BlockDefinition` / `BlockInstance` + JSON save/load. |
-| `lib/services/vision_service.dart` | Camera ownership (ref-counted), detection → tracking, `targetOffsetX/Y`, `targetArea`, line-following outputs. |
-| `lib/services/object_detector_service.dart` | TFLite in a background isolate: fused YUV→RGB→resize→rotate, XNNPack multithreaded, Sobel line detector. |
-| `lib/services/sensor_service.dart` | IMU at 20 ms: pitch/roll from gravity, shake, yaw rate, compass. `SensorMath` is pure. |
-| `lib/services/connectivity/` | `RobotProtocol` + `BluetoothStrategy` / `SerialStrategy` / `WifiStrategy` behind `ConnectivityManager`. |
-| `lib/ui/logic_page.dart` | Block editor canvas, palette, snippets, save/load. |
-| `lib/models/tutorial_data.dart` | Built-in tutorials with visual block previews. |
-| `arduino/` | Firmware for ESP32, Uno, Mega. |
-| `test/` | Unit tests for protocol + frame parser, block JSON, block→Python conversion, voice matching, tracking and sensor math, and the Python interpreter + `robot` module (with a fake robot). |
-
-## Blocks at a glance
-
-- **Sensors:** Object Detected, Lock Object Type, Target X/Y Offset, Target Size %,
-  Line Visible / Line Offset X, Phone Shaking / Tilted / Spinning, Tilt Pitch/Roll,
-  Rotation Rate, Compass Heading / Facing, Loud Noise, Heard *phrase*.
-- **Logic:** If, If/Else, While, Repeat, Wait, True/False, And/Or/Not, Print,
-  Say (text-to-speech), Stop Program, Expression.
-- **Math:** Number, + − × ÷, < >.
-- **Actuators:** one block per configured device (LED on/off/toggle, motor
-  direction + speed, positional or continuous servo, buzzer, switch), *Track X*
-  for servos, and **Smart Follow** (native follow/fetch controller).
-
-## Vision notes
-
-- Model: `assets/ml/1.tflite` — EfficientDet-Lite0 int8 (TF Hub/Kaggle), 320×320
-  input, COCO labels in `labelmap.txt` (line 0 is the background placeholder).
-  Accuracy, latency and limitations: [docs/MODELS.md](docs/MODELS.md).
-- Camera runs at `ResolutionPreset.low`; frames are throttled to ~25 FPS and
-  skipped while the isolate is busy. Bounding boxes are normalized (0..1) in
-  portrait display space.
-- Vision settings (which labels to report, confidence threshold, phone mounted
-  upside down) live in **Camera → gear icon** and persist.
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the app is put together, data flow, where to change what |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setting up, safety rules for contributors, tests, PRs |
+| [docs/MODELS.md](docs/MODELS.md) | Detection model card, measured accuracy/latency, evaluation harness |
+| [docs/DEVICE_TEST_CHECKLIST.md](docs/DEVICE_TEST_CHECKLIST.md) | Manual release testing on phones and robots |
+| [docs/APPLE_FEASIBILITY.md](docs/APPLE_FEASIBILITY.md) | What an iOS port would take |
+| [docs/AUDIT_2026-09.md](docs/AUDIT_2026-09.md) | Pre-release audit: fixes, open findings, roadmap |
+| [SECURITY.md](SECURITY.md) | Reporting vulnerabilities, known limitations |
 
 ## Developing
 
 ```
-flutter analyze        # must be clean
-flutter test           # pure-logic tests, no device needed
-flutter run            # physical device
+flutter analyze        # must report "No issues found"
+flutter test           # 130+ unit/widget tests, no phone needed
+flutter run            # on a physical phone
 ```
 
-Useful debugging: **Code tab → ⋮ → View Logs** shows every command the
-interpreter sends; the firmware echoes `EXEC:` lines over USB serial at 115200.
+CI (`.github/workflows/ci.yml`) runs analyze, tests and a release APK build.
+Debugging on a robot: **Blocks › ⋮ › View Logs** shows every command the
+interpreter sends; `#define DEBUG_ECHO` in the ESP32 sketch prints `EXEC:`
+lines over USB serial at 115200.
+
+## License
+
+TODO(owner): not chosen yet — see "Needs decision" in
+[docs/AUDIT_2026-09.md](docs/AUDIT_2026-09.md). Third-party components keep
+their licenses: the EfficientDet-Lite0 model (Apache-2.0, TensorFlow), COCO
+labels (CC BY 4.0), and the Flutter packages listed in `pubspec.lock`
+(BSD-3-Clause, MIT, Apache-2.0; two Linux-only MPL-2.0 packages).
