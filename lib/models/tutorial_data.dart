@@ -215,15 +215,15 @@ class TutorialRepository {
         TutorialStep(
           text:
               'Wire the LED (Uno/Mega): long leg → 220 Ω resistor → pin 12, '
-              'short leg → GND. Don\'t use pin 13: the firmware flashes it '
-              'every time a command arrives.\n'
+              'short leg → GND. (No wiring? Pin 13 is the built-in LED; with '
+              'firmware older than 1.5 it also flashes on every command.)\n'
               'ESP32: no wiring needed — use the built-in LED on GPIO 2.',
         ),
         TutorialStep(
           text:
               'Connect. $_connectHowTo\n'
               'Uno/Mega: plug the board into the phone with the OTG adapter and '
-              'allow USB access. ESP32: it shows up as "ESP32 Robot".',
+              'allow USB access. ESP32: it shows up as "ESP32 Robot" plus 4 characters.',
         ),
         TutorialStep(
           text:
@@ -801,7 +801,7 @@ class TutorialRepository {
           text:
               'Build the car from "Beat Reactive Dancer" with an ESP32 (IN1 → '
               'GPIO 25, IN3 → GPIO 26; in Configure Hardware Pin 32 / 33, IN1 '
-              'Pin 25 / 26). Connect: Home header › Bluetooth ("ESP32 Robot").',
+              'Pin 25 / 26). Connect: Home header › Bluetooth ("ESP32 Robot …").',
         ),
         TutorialStep(
           text:

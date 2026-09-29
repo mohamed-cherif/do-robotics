@@ -52,13 +52,15 @@ The camera, Bluetooth, USB and speech recognition need a real phone; the
 emulator can only show the UI.
 
 **3. Connect.** On the **Home** tab tap the header ("SYSTEM OFFLINE") and
-choose **Bluetooth** (ESP32 — it advertises as *ESP32 Robot*) or **USB
+choose **Bluetooth** (ESP32 — it advertises as *ESP32 Robot XXXX*, where
+XXXX are the last 4 hex digits of the board's MAC address) or **USB
 Serial (OTG)** (any board, via an OTG adapter). Accept the permission
 prompts. The header turns green: *SYSTEM ONLINE*.
 
 **4. Tell the app what's wired.** Home › **Configure Hardware** › Add
-Actuator: e.g. an LED on pin 2 (the ESP32's built-in LED) or pin 12
-(Uno/Mega — avoid pin 13, the firmware blinks it on every command).
+Actuator: e.g. an LED on pin 2 (the ESP32's built-in LED) or pin 13
+(the Uno/Mega built-in LED). If a pin can't be used on your board, the
+program log says so (*Robot: pin 6 can't be used on this board*).
 
 **5. Run something.** Home › Featured Tutorials › **Connect & Hello LED**,
 or Blocks › ⚡ Snippets. Press **RUN** (bottom right) and **STOP** to end.
@@ -69,10 +71,12 @@ or Blocks › ⚡ Snippets. Press **RUN** (bottom right) and **STOP** to end.
 
 ### WiFi (ESP32 only)
 
-The ESP32 also opens a hotspot `ESP32_Robot` (password `12345678` —
-change `WIFI_PASS` in the sketch before using it around other people). To
-put the robot on your home WiFi: connect over Bluetooth or USB first, then
-header menu › **Set up robot WiFi**. Afterwards use header › **WiFi** ›
+The ESP32 also opens a hotspot `ESP32_Robot_XXXX` (same XXXX as the
+Bluetooth name; password `12345678` — change `WIFI_PASS` in the sketch
+before using it around other people). To put the robot on your home WiFi:
+connect over Bluetooth or USB first, then header menu › **Set up robot
+WiFi** (for safety the robot only accepts WiFi settings over Bluetooth or
+USB, never over WiFi itself). Afterwards use header › **WiFi** ›
 **Find robot** (mDNS `robot.local`), or type the IP address.
 
 ## Programming

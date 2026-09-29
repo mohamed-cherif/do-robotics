@@ -37,7 +37,7 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
 
 ## 4. WiFi (ESP32)
 
-- [ ] Hotspot `ESP32_Robot`: connect to `192.168.4.1:4210`.
+- [ ] Hotspot `ESP32_Robot_XXXX` (XXXX = same suffix as the BLE name `ESP32 Robot XXXX`): connect to `192.168.4.1:4210`.
 - [ ] Set up robot WiFi over BLE → robot joins home WiFi → **Find robot** lists it
       (checks the multicast lock) → connect via `robot.local`.
 - [ ] Change the WiFi address while connected → app reconnects to the new host.

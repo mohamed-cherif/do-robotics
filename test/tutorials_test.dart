@@ -83,7 +83,9 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
 
-    await tester.scrollUntilVisible(find.text(_goBuildIt), 300,
+    // hitTestable(): the list builds items ahead of the viewport, so "found"
+    // alone can still mean just off-screen.
+    await tester.scrollUntilVisible(find.text(_goBuildIt).hitTestable(), 300,
         scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text(_goBuildIt));
     await tester.pumpAndSettle();

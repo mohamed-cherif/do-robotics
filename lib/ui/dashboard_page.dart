@@ -94,7 +94,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
       ConnectionType.serial =>
         'Plug the board in with a USB-OTG cable and accept the USB permission prompt.',
       ConnectionType.wifi =>
-        'Is the phone on the same WiFi as the robot (or on the ESP32_Robot hotspot)?',
+        'Is the phone on the same WiFi as the robot (or on its ESP32_Robot_… hotspot)?',
     };
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text("Couldn't connect over ${_connectivity.activeType.displayName}. $hint"),
