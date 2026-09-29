@@ -30,7 +30,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_blue_plus: ^1.34.4
+  # Stay on 1.x (BSD-3-Clause). 2.x uses a non-open-source license that
+  # requires a paid license for any for-profit use — see docs/AUDIT_2026-09.md D11.
+  flutter_blue_plus: ">=1.34.4 <2.0.0"
   camera: ^0.11.0
   permission_handler: ^12.0.1
 
