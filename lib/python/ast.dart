@@ -79,7 +79,8 @@ class Subscript extends Expr {
 class SliceExpr extends Expr {
   final Expr? lower;
   final Expr? upper;
-  const SliceExpr(this.lower, this.upper, int line) : super(line);
+  final Expr? step;
+  const SliceExpr(this.lower, this.upper, int line, [this.step]) : super(line);
 }
 
 class Call extends Expr {
@@ -209,7 +210,12 @@ class Global extends Stmt {
 
 class Import extends Stmt {
   final List<String> modules;
-  const Import(this.modules, int line) : super(line);
+
+  /// Names the statement binds: local name -> dotted path to the value
+  /// (`import math as m` → {m: math}; `from math import sqrt` →
+  /// {sqrt: math.sqrt}). A `*` key binds every attribute of the module.
+  final Map<String, String> bindings;
+  const Import(this.modules, int line, [this.bindings = const {}]) : super(line);
 }
 
 class Module {

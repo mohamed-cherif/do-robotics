@@ -47,6 +47,9 @@ class PythonScriptRunner {
       return null;
     } on PySyntaxError catch (e) {
       return e.toString();
+    } catch (e) {
+      // The Run button calls this first; nothing may escape it.
+      return 'cannot check this program: $e';
     }
   }
 

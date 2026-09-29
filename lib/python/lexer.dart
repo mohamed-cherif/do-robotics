@@ -26,7 +26,7 @@ class PySyntaxError implements Exception {
 class Lexer {
   final String src;
   int _pos = 0;
-  int _line = 1;
+  int _line;
   int _lineStart = 0;
   int _parenDepth = 0;
   bool _atLineStart = true;
@@ -45,7 +45,12 @@ class Lexer {
     '+', '-', '*', '/', '%', '<', '>', '=', '(', ')', '[', ']', '{', '}', ',', ':', '.', ';',
   ];
 
-  Lexer(this.src);
+  /// [line] is the line number of the first character (f-string fields are
+  /// lexed separately but must report the f-string's line). CRLF / CR line
+  /// endings (Windows and some Android editors) are normalized to LF.
+  Lexer(String src, {int line = 1})
+      : src = src.replaceAll('\r\n', '\n').replaceAll('\r', '\n'),
+        _line = line;
 
   List<Token> tokenize() {
     while (_pos < src.length) {
@@ -57,10 +62,14 @@ class Lexer {
       final c = src[_pos];
       if (c == '\n') {
         _pos++;
-        if (_parenDepth == 0) _emit(TokenType.newline, '\n');
+        // Inside brackets a newline is just whitespace; indentation is only
+        // measured at the start of a logical line.
+        if (_parenDepth == 0) {
+          _emit(TokenType.newline, '\n');
+          _atLineStart = true;
+        }
         _line++;
         _lineStart = _pos;
-        _atLineStart = true;
         continue;
       }
       if (c == '\r' || c == ' ' || c == '\t') {
@@ -194,7 +203,9 @@ class Lexer {
       while (_pos < src.length && RegExp(r'[0-9a-fA-F_]').hasMatch(src[_pos])) {
         _pos++;
       }
-      _tokens.add(Token(TokenType.number, src.substring(start, _pos).replaceAll('_', ''), _line, start - _lineStart));
+      final text = src.substring(start, _pos).replaceAll('_', '');
+      if (text.length == 2) throw PySyntaxError('invalid hexadecimal literal', _line);
+      _tokens.add(Token(TokenType.number, text, _line, start - _lineStart));
       return;
     }
     while (_pos < src.length && (_isDigit(src[_pos]) || src[_pos] == '_')) {

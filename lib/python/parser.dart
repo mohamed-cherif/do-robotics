@@ -8,7 +8,24 @@ class Parser {
   final List<Token> _t;
   int _i = 0;
 
+  /// Nesting limit for brackets / unary operators / `**` chains. The parser
+  /// and evaluator are recursive; without a limit ~1000 nested brackets
+  /// overflow the Dart stack instead of giving a syntax error.
+  static const int maxNesting = 100;
+  int _nesting = 0;
+
   Parser(List<Token> tokens) : _t = tokens;
+
+  T _nested<T>(T Function() parse) {
+    if (++_nesting > maxNesting) {
+      throw PySyntaxError('expression is nested too deeply (limit $maxNesting)', _cur.line);
+    }
+    try {
+      return parse();
+    } finally {
+      _nesting--;
+    }
+  }
 
   static Module parse(String source) {
     final tokens = Lexer(source).tokenize();
@@ -108,6 +125,12 @@ class Parser {
     final line = _cur.line;
     if (_cur.type == TokenType.name) {
       switch (_cur.text) {
+        case 'del':
+        case 'nonlocal':
+        case 'raise':
+        case 'assert':
+        case 'yield':
+          throw PySyntaxError("'${_cur.text}' is not supported in RoboPython", line);
         case 'return':
           _advance();
           if (_cur.type == TokenType.newline || _cur.type == TokenType.eof || _isOp(';')) {
@@ -133,34 +156,42 @@ class Parser {
           return Global(names, line);
         case 'import':
           _advance();
-          final mods = <String>[_parseDottedName()];
-          if (_isKeyword('as')) {
-            _advance();
-            _expectName();
-          }
-          while (_isOp(',')) {
-            _advance();
-            mods.add(_parseDottedName());
+          final mods = <String>[];
+          final bindings = <String, String>{};
+          do {
+            if (mods.isNotEmpty) _advance(); // ','
+            final mod = _parseDottedName();
+            mods.add(mod);
             if (_isKeyword('as')) {
               _advance();
-              _expectName();
+              bindings[_expectName()] = mod;
+            } else {
+              final top = mod.split('.').first;
+              bindings[top] = top;
             }
-          }
-          return Import(mods, line);
+          } while (_isOp(','));
+          return Import(mods, line, bindings);
         case 'from':
           _advance();
           final mod = _parseDottedName();
           _expectKeyword('import');
+          final bindings = <String, String>{};
           if (_isOp('*')) {
             _advance();
+            bindings['*'] = mod;
           } else {
-            _expectName();
-            while (_isOp(',')) {
-              _advance();
-              _expectName();
-            }
+            do {
+              if (bindings.isNotEmpty) _advance(); // ','
+              final name = _expectName();
+              var alias = name;
+              if (_isKeyword('as')) {
+                _advance();
+                alias = _expectName();
+              }
+              bindings[alias] = '$mod.$name';
+            } while (_isOp(','));
           }
-          return Import([mod], line);
+          return Import([mod], line, bindings);
       }
     }
 
@@ -372,7 +403,9 @@ class Parser {
     return TupleLit(elements, line);
   }
 
-  Expr _parseExpr() {
+  Expr _parseExpr() => _nested(_parseExprUnchecked);
+
+  Expr _parseExprUnchecked() {
     if (_isKeyword('lambda')) {
       final line = _cur.line;
       _advance();
@@ -425,7 +458,7 @@ class Parser {
     if (_isKeyword('not')) {
       final line = _cur.line;
       _advance();
-      return UnaryOp('not', _parseNot(), line);
+      return UnaryOp('not', _nested(_parseNot), line);
     }
     return _parseComparison();
   }
@@ -487,7 +520,7 @@ class Parser {
     if (_cur.type == TokenType.op && (_cur.text == '-' || _cur.text == '+')) {
       final line = _cur.line;
       final op = _advance().text;
-      return UnaryOp(op, _parseFactor(), line);
+      return UnaryOp(op, _nested(_parseFactor), line);
     }
     return _parsePower();
   }
@@ -497,7 +530,7 @@ class Parser {
     if (_isOp('**')) {
       final line = _cur.line;
       _advance();
-      return BinOp('**', base, _parseFactor(), line); // right-assoc
+      return BinOp('**', base, _nested(_parseFactor), line); // right-assoc
     }
     return base;
   }
@@ -526,6 +559,9 @@ class Parser {
               throw PySyntaxError('positional argument follows keyword argument', _cur.line);
             }
             args.add(_parseExpr());
+            if (_isKeyword('for')) {
+              throw PySyntaxError('generator expressions are not supported in RoboPython', _cur.line);
+            }
           }
           if (_isOp(',')) {
             _advance();
@@ -539,19 +575,19 @@ class Parser {
         final line = _cur.line;
         _advance();
         Expr index;
+        final lower = _isOp(':') ? null : _parseExpr();
         if (_isOp(':')) {
+          // slice: [lower:upper] or [lower:upper:step], every part optional
           _advance();
-          final upper = _isOp(']') ? null : _parseExpr();
-          index = SliceExpr(null, upper, line);
-        } else {
-          final lower = _parseExpr();
+          final upper = (_isOp(']') || _isOp(':')) ? null : _parseExpr();
+          Expr? step;
           if (_isOp(':')) {
             _advance();
-            final upper = _isOp(']') ? null : _parseExpr();
-            index = SliceExpr(lower, upper, line);
-          } else {
-            index = lower;
+            step = _isOp(']') ? null : _parseExpr();
           }
+          index = SliceExpr(lower, upper, line, step);
+        } else {
+          index = lower!;
         }
         _expectOp(']');
         e = Subscript(e, index, line);
@@ -605,6 +641,9 @@ class Parser {
             return TupleLit(const [], line);
           }
           final first = _parseExpr();
+          if (_isKeyword('for')) {
+            throw PySyntaxError('generator expressions are not supported in RoboPython', _cur.line);
+          }
           if (_isOp(',')) {
             final elements = <Expr>[first];
             while (_isOp(',')) {
@@ -641,8 +680,18 @@ class Parser {
           final values = <Expr>[];
           while (!_isOp('}')) {
             keys.add(_parseExpr());
-            _expectOp(':');
+            if (!_isOp(':')) {
+              throw PySyntaxError(
+                  _isKeyword('for')
+                      ? 'set comprehensions are not supported in RoboPython'
+                      : 'set literals are not supported in RoboPython (use a list or a dict)',
+                  _cur.line);
+            }
+            _advance();
             values.add(_parseExpr());
+            if (_isKeyword('for')) {
+              throw PySyntaxError('dict comprehensions are not supported in RoboPython', _cur.line);
+            }
             if (_isOp(',')) {
               _advance();
             } else {
@@ -661,10 +710,14 @@ class Parser {
 
   num _parseNumber(String text, int line) {
     if (text.startsWith('0x') || text.startsWith('0X')) {
-      return int.parse(text.substring(2), radix: 16);
+      return int.tryParse(text.substring(2), radix: 16) ??
+          (throw PySyntaxError('integer literal is too large', line));
     }
     final asInt = int.tryParse(text);
     if (asInt != null) return asInt;
+    if (RegExp(r'^\d+$').hasMatch(text)) {
+      throw PySyntaxError('integer literal is too large', line);
+    }
     final asDouble = double.tryParse(text);
     if (asDouble != null) return asDouble;
     throw PySyntaxError("invalid number '$text'", line);
@@ -716,13 +769,15 @@ class Parser {
           parts.add(buf.toString());
           buf.clear();
         }
-        final exprTokens = Lexer(inner.trim()).tokenize();
-        final sub = Parser(exprTokens);
+        // Lex from the f-string's line so syntax and runtime errors in the
+        // field point at the right line.
+        final exprTokens = Lexer(inner.trim(), line: line).tokenize();
+        final sub = Parser(exprTokens).._nesting = _nesting;
         final expr = sub._parseExpr();
         if (sub._cur.type != TokenType.newline && sub._cur.type != TokenType.eof) {
           throw PySyntaxError('f-string: invalid expression', line);
         }
-        parts.add(FStrField(_relineExpr(expr, line), format));
+        parts.add(FStrField(expr, format));
         i = j + 1;
         continue;
       }
@@ -740,9 +795,4 @@ class Parser {
     if (buf.isNotEmpty) parts.add(buf.toString());
     return FStr(parts, line);
   }
-
-  // Sub-parsed f-string expressions carry line 1; runtime errors should
-  // report the f-string's line. The interpreter uses the FStr node's line,
-  // so nothing to rewrite here.
-  Expr _relineExpr(Expr e, int line) => e;
 }

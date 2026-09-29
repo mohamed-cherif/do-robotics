@@ -31,7 +31,12 @@ class Scope {
   final Map<String, Object?> vars = {};
   final Scope? parent;
   final Set<String> globalNames = {};
-  Scope(this.parent);
+
+  /// For function scopes: every name the function body assigns (Python makes
+  /// these local for the whole body). Reading one before it is assigned is an
+  /// error instead of silently reading the outer variable.
+  final Set<String> localNames;
+  Scope(this.parent, [this.localNames = const {}]);
 
   Scope get root {
     var s = this;
@@ -58,7 +63,9 @@ class PyFunction {
   final Scope closure;
   final Expr? lambdaBody;
   final Map<String, Object?> defaults;
-  PyFunction(this.name, this.params, this.body, this.closure, this.defaults, {this.lambdaBody});
+  final Set<String> localNames;
+  PyFunction(this.name, this.params, this.body, this.closure, this.defaults,
+      {this.lambdaBody, this.localNames = const {}});
   @override
   String toString() => '<function $name>';
 }
@@ -79,6 +86,10 @@ class Interpreter {
   int _stepsSinceYield = 0;
   int _currentLine = 0;
   int get currentLine => _currentLine;
+
+  /// Python-level call depth limit (CPython's default is also 1000).
+  static const int maxRecursionDepth = 1000;
+  int _callDepth = 0;
 
   Interpreter({
     required this.onPrint,
@@ -128,6 +139,10 @@ class Interpreter {
 
   /// Cancellable sleep.
   Future<void> sleep(double seconds) async {
+    if (!seconds.isFinite || seconds > 1e9) {
+      throw PyRuntimeError('sleep length must be a finite number of seconds (at most 1e9)');
+    }
+    if (seconds < 0) seconds = 0;
     final deadline = DateTime.now().add(Duration(microseconds: (seconds * 1e6).round()));
     while (true) {
       if (cancel.isCancelled) throw const PyCancelled();
@@ -196,7 +211,8 @@ class Interpreter {
           for (final p in s.params) {
             if (p.defaultValue != null) defaults[p.name] = await eval(p.defaultValue!, scope);
           }
-          scope.vars[s.name] = PyFunction(s.name, s.params, s.body, scope, defaults);
+          scope.vars[s.name] = PyFunction(s.name, s.params, s.body, scope, defaults,
+              localNames: _assignedNames(s.body));
         case Return():
           throw _ReturnSignal(s.value == null ? null : await eval(s.value!, scope));
         case Break():
@@ -214,13 +230,92 @@ class Interpreter {
               throw PyRuntimeError("No module named '$m' (available: robot, time, math, random)", s.line);
             }
           }
+          for (final b in s.bindings.entries) {
+            final path = b.value.split('.');
+            Object? value = globals.vars[path.first];
+            for (final attr in path.skip(1)) {
+              try {
+                value = await getAttr(value, attr, s.line);
+              } on PyRuntimeError {
+                throw PyRuntimeError("cannot import name '$attr' from '${path.first}'", s.line);
+              }
+            }
+            if (b.key == '*') {
+              if (value is PyObject) {
+                for (final e in value.attrs.entries) {
+                  await _assign(Name(e.key, s.line), e.value, scope);
+                }
+              }
+            } else {
+              await _assign(Name(b.key, s.line), value, scope);
+            }
+          }
         default:
           throw PyRuntimeError('unsupported statement', s.line);
       }
     } on PyRuntimeError catch (e) {
       e.line ??= s.line;
       rethrow;
+    } on PyExit {
+      rethrow;
+    } on PyCancelled {
+      rethrow;
+    } on _BreakSignal {
+      rethrow;
+    } on _ContinueSignal {
+      rethrow;
+    } on _ReturnSignal {
+      rethrow;
+    } catch (e) {
+      // Last resort: never let a raw Dart error (RangeError, StackOverflowError
+      // from a self-containing list, ...) escape without a line number.
+      throw PyRuntimeError(_dartErrorReason(e), s.line);
     }
+  }
+
+  /// Names a function body assigns (its locals), minus `global` declarations.
+  static Set<String> _assignedNames(List<Stmt> body) {
+    final names = <String>{};
+    final declaredGlobal = <String>{};
+    void target(Expr t) {
+      if (t is Name) {
+        names.add(t.id);
+      } else if (t is TupleLit) {
+        t.elements.forEach(target);
+      } else if (t is ListLit) {
+        t.elements.forEach(target);
+      }
+    }
+
+    void walk(List<Stmt> stmts) {
+      for (final s in stmts) {
+        switch (s) {
+          case Assign():
+            target(s.target);
+          case AugAssign():
+            target(s.target);
+          case For():
+            target(s.target);
+            walk(s.body);
+          case While():
+            walk(s.body);
+          case If():
+            walk(s.body);
+            walk(s.orelse);
+          case FunctionDef():
+            names.add(s.name);
+          case Import():
+            names.addAll(s.bindings.keys.where((k) => k != '*'));
+          case Global():
+            declaredGlobal.addAll(s.names);
+          default:
+            break;
+        }
+      }
+    }
+
+    walk(body);
+    return names.difference(declaredGlobal);
   }
 
   Future<void> _assign(Expr target, Object? value, Scope scope) async {
@@ -259,16 +354,16 @@ class Interpreter {
           throw PyRuntimeError("'${pyTypeName(obj)}' object does not support item assignment", target.line);
         }
       case TupleLit():
-        _assignSequence(target.elements, value, scope, target.line);
+        await _assignSequence(target.elements, value, scope, target.line);
       case ListLit():
-        _assignSequence(target.elements, value, scope, target.line);
+        await _assignSequence(target.elements, value, scope, target.line);
       default:
         throw PyRuntimeError('cannot assign to expression', target.line);
     }
   }
 
   Future<void> _assignSequence(List<Expr> targets, Object? value, Scope scope, int line) async {
-    final items = pyIterate(value).toList();
+    final items = pyToList(value);
     if (items.length != targets.length) {
       throw PyRuntimeError(
           'cannot unpack ${items.length} values into ${targets.length} targets', line);
@@ -308,6 +403,7 @@ class Interpreter {
             buf.write(formatValue(v, part.format, e.line));
           }
         }
+        checkStrLen(buf.length);
         return buf.toString();
       case ListLit():
         final items = <Object?>[];
@@ -350,7 +446,8 @@ class Interpreter {
           case 'not':
             return !pyTruthy(v);
           case '-':
-            return -pyToNum(v);
+            final n = pyToNum(v);
+            return n is int ? pyNegInt(n) : -n;
           case '+':
             return pyToNum(v);
         }
@@ -403,19 +500,33 @@ class Interpreter {
     final out = <Object?>[];
     if (scope.globalNames.contains(n.id)) {
       if (scope.root.vars.containsKey(n.id)) return scope.root.vars[n.id];
+    } else if (scope.localNames.contains(n.id) && !scope.vars.containsKey(n.id)) {
+      throw PyRuntimeError(
+          "local variable '${n.id}' referenced before assignment "
+          "(to change the variable outside the function, add 'global ${n.id}')",
+          n.line);
     } else if (scope.lookup(n.id, out)) {
       return out.first;
     }
     throw PyRuntimeError("name '${n.id}' is not defined", n.line);
   }
 
+  Future<int?> _sliceBound(Expr? e, Scope scope) async {
+    if (e == null) return null;
+    final v = await eval(e, scope);
+    return v == null ? null : pyToInt(v);
+  }
+
   Future<Object?> _subscript(Object? obj, Subscript e, Scope scope) async {
     if (e.index is SliceExpr) {
       final s = e.index as SliceExpr;
-      final lo = s.lower == null ? null : pyToInt(await eval(s.lower!, scope));
-      final hi = s.upper == null ? null : pyToInt(await eval(s.upper!, scope));
+      final lo = await _sliceBound(s.lower, scope);
+      final hi = await _sliceBound(s.upper, scope);
+      final step = await _sliceBound(s.step, scope) ?? 1;
+      if (step == 0) throw PyRuntimeError('slice step cannot be zero', e.line);
       List<Object?> items;
       if (obj is String) {
+        if (step != 1) return [for (final i in _stepIndices(lo, hi, step, obj.length)) obj[i]].join();
         final r = _sliceRange(lo, hi, obj.length);
         return obj.substring(r.$1, r.$2);
       } else if (obj is PyList) {
@@ -425,8 +536,13 @@ class Interpreter {
       } else {
         throw PyRuntimeError("'${pyTypeName(obj)}' object is not subscriptable", e.line);
       }
-      final r = _sliceRange(lo, hi, items.length);
-      final sub = items.sublist(r.$1, r.$2);
+      final List<Object?> sub;
+      if (step != 1) {
+        sub = [for (final i in _stepIndices(lo, hi, step, items.length)) items[i]];
+      } else {
+        final r = _sliceRange(lo, hi, items.length);
+        sub = items.sublist(r.$1, r.$2);
+      }
       return obj is PyTuple ? PyTuple(sub) : PyList(sub);
     }
     final idx = await eval(e.index, scope);
@@ -438,11 +554,21 @@ class Interpreter {
     if (obj is String) return obj[_normIndex(i, obj.length, e.line)];
     if (obj is PyList) return obj.items[_normIndex(i, obj.items.length, e.line)];
     if (obj is PyTuple) return obj.items[_normIndex(i, obj.items.length, e.line)];
-    if (obj is PyRange) {
-      final vals = obj.values.toList();
-      return vals[_normIndex(i, vals.length, e.line)];
-    }
+    if (obj is PyRange) return obj.at(_normIndex(i, obj.length, e.line));
     throw PyRuntimeError("'${pyTypeName(obj)}' object is not subscriptable", e.line);
+  }
+
+  /// Indices selected by a slice with a step other than 1 (CPython's rules).
+  List<int> _stepIndices(int? lo, int? hi, int step, int length) {
+    int start, stop;
+    if (step > 0) {
+      start = lo == null ? 0 : (lo < 0 ? math.max(lo + length, 0) : math.min(lo, length));
+      stop = hi == null ? length : (hi < 0 ? math.max(hi + length, 0) : math.min(hi, length));
+    } else {
+      start = lo == null ? length - 1 : (lo < 0 ? math.max(lo + length, -1) : math.min(lo, length - 1));
+      stop = hi == null ? -1 : (hi < 0 ? math.max(hi + length, -1) : math.min(hi, length - 1));
+    }
+    return [for (int i = start; step > 0 ? i < stop : i > stop; i += step) i];
   }
 
   (int, int) _sliceRange(int? lo, int? hi, int length) {
@@ -459,22 +585,26 @@ class Interpreter {
   Object? _binary(String op, Object? l, Object? r) {
     // String / list operators
     if (op == '+') {
-      if (l is String && r is String) return l + r;
-      if (l is PyList && r is PyList) return PyList([...l.items, ...r.items]);
-      if (l is PyTuple && r is PyTuple) return PyTuple([...l.items, ...r.items]);
+      if (l is String && r is String) {
+        checkStrLen(l.length + r.length);
+        return l + r;
+      }
+      if (l is PyList && r is PyList) {
+        checkSeqLen(l.items.length + r.items.length);
+        return PyList([...l.items, ...r.items]);
+      }
+      if (l is PyTuple && r is PyTuple) {
+        checkSeqLen(l.items.length + r.items.length);
+        return PyTuple([...l.items, ...r.items]);
+      }
       if (l is String || r is String) {
         throw PyRuntimeError('can only concatenate str (not "${pyTypeName(l is String ? r : l)}") to str');
       }
     }
     if (op == '*') {
-      if (l is String && (r is int || r is bool)) return l * pyToInt(r);
-      if (r is String && (l is int || l is bool)) return r * pyToInt(l);
-      if (l is PyList && (r is int || r is bool)) {
-        return PyList([for (int i = 0; i < pyToInt(r); i++) ...l.items]);
-      }
-      if (r is PyList && (l is int || l is bool)) {
-        return PyList([for (int i = 0; i < pyToInt(l); i++) ...r.items]);
-      }
+      // Size is checked before allocating: "a" * 10**9 must not freeze the app.
+      if ((l is String || l is PyList) && (r is int || r is bool)) return _repeat(l!, pyToInt(r));
+      if ((r is String || r is PyList) && (l is int || l is bool)) return _repeat(r!, pyToInt(l));
     }
     if (op == '%' && l is String) {
       // printf-style formatting: "%d apples" % 3  or  "%s %s" % (a, b)
@@ -485,11 +615,11 @@ class Interpreter {
     final b = pyToNum(r, 'operand');
     switch (op) {
       case '+':
-        return a + b;
+        return pyAddNum(a, b);
       case '-':
-        return a - b;
+        return (a is int && b is int) ? pySubInt(a, b) : a - b;
       case '*':
-        return a * b;
+        return (a is int && b is int) ? pyMulInt(a, b) : a * b;
       case '/':
         if (b == 0) throw PyRuntimeError('division by zero');
         return a / b;
@@ -498,18 +628,26 @@ class Interpreter {
       case '%':
         return pyMod(a, b);
       case '**':
-        if (a is int && b is int && b >= 0) {
-          return math.pow(a, b).toInt();
-        }
+        if (a is int && b is int && b >= 0) return pyPowInt(a, b);
         return math.pow(a, b);
     }
     throw PyRuntimeError('unsupported operator $op');
   }
 
+  Object _repeat(Object seq, int times) {
+    if (seq is String) {
+      checkRepeat(seq.length, times, string: true);
+      return times <= 0 ? '' : seq * times;
+    }
+    final items = (seq as PyList).items;
+    checkRepeat(items.length, times, string: false);
+    return PyList([for (int i = 0; i < times; i++) ...items]);
+  }
+
   String _percentFormat(String fmt, List<Object?> args) {
     int argIdx = 0;
     final re = RegExp(r'%(\.\d+)?([sdifr%])');
-    return fmt.replaceAllMapped(re, (m) {
+    final result = fmt.replaceAllMapped(re, (m) {
       final conv = m.group(2)!;
       if (conv == '%') return '%';
       if (argIdx >= args.length) throw PyRuntimeError('not enough arguments for format string');
@@ -528,6 +666,8 @@ class Interpreter {
           return pyStr(v);
       }
     });
+    checkStrLen(result.length);
+    return result;
   }
 
   bool _compare(String op, Object? l, Object? r, int line) {
@@ -570,6 +710,7 @@ class Interpreter {
       return container.contains(item);
     }
     if (container is PyDict) return container.containsKey(item);
+    if (container is PyRange) return container.contains(item); // O(1), not a scan
     for (final v in pyIterate(container)) {
       if (pyEquals(v, item)) return true;
     }
@@ -584,7 +725,7 @@ class Interpreter {
       if (g != null) return g();
       throw PyRuntimeError("'${obj.typeName}' has no attribute '$name'", line);
     }
-    final m = methodFor(obj, name);
+    final m = methodFor(obj, name, this);
     if (m != null) return m;
     throw PyRuntimeError("'${pyTypeName(obj)}' object has no attribute '$name'", line);
   }
@@ -598,42 +739,81 @@ class Interpreter {
       } on PyRuntimeError catch (e) {
         e.line ??= line;
         rethrow;
+      } on PyExit {
+        rethrow;
+      } on PyCancelled {
+        rethrow;
+      } on PySyntaxError {
+        rethrow;
+      } catch (e) {
+        // e.g. a missing argument surfacing as a RangeError inside the builtin.
+        throw PyRuntimeError('${fn.name}(): ${_dartErrorReason(e)}', line);
       }
     }
     if (fn is PyFunction) {
-      final scope = Scope(fn.closure);
-      // bind params
-      final params = fn.params;
-      if (args.length > params.length) {
-        throw PyRuntimeError(
-            '${fn.name}() takes ${params.length} positional argument${params.length == 1 ? '' : 's'} but ${args.length} were given',
-            line);
+      if (_callDepth >= maxRecursionDepth) {
+        throw PyRuntimeError('maximum recursion depth exceeded', line);
       }
-      for (int i = 0; i < params.length; i++) {
-        final p = params[i];
-        if (i < args.length) {
-          scope.vars[p.name] = args[i];
-        } else if (kwargs.containsKey(p.name)) {
-          scope.vars[p.name] = kwargs[p.name];
-        } else if (fn.defaults.containsKey(p.name)) {
-          scope.vars[p.name] = fn.defaults[p.name];
-        } else {
-          throw PyRuntimeError("${fn.name}() missing required argument: '${p.name}'", line);
-        }
-      }
-      for (final k in kwargs.keys) {
-        if (!params.any((p) => p.name == k)) {
-          throw PyRuntimeError("${fn.name}() got an unexpected keyword argument '$k'", line);
-        }
-      }
-      if (fn.lambdaBody != null) return eval(fn.lambdaBody!, scope);
+      _callDepth++;
       try {
-        await execBlock(fn.body, scope);
-      } on _ReturnSignal catch (r) {
-        return r.value;
+        return await _callFunction(fn, args, kwargs, line);
+      } finally {
+        _callDepth--;
+        // Finishing a Python call completes the caller's future, which can
+        // synchronously complete *its* caller's, and so on down the whole
+        // Python stack; a few hundred frames of that overflow the Dart stack
+        // (and the StackOverflowError escapes as an uncaught async error, so
+        // run() never completes). One microtask hop per call breaks the chain.
+        await Future<void>.value();
       }
-      return null;
     }
     throw PyRuntimeError("'${pyTypeName(fn)}' object is not callable ($describe)", line);
   }
+
+  Future<Object?> _callFunction(PyFunction fn, List<Object?> args, Map<String, Object?> kwargs, int line) async {
+    final scope = Scope(fn.closure, fn.localNames);
+    // bind params
+    final params = fn.params;
+    if (args.length > params.length) {
+      throw PyRuntimeError(
+          '${fn.name}() takes ${params.length} positional argument${params.length == 1 ? '' : 's'} but ${args.length} were given',
+          line);
+    }
+    for (int i = 0; i < params.length; i++) {
+      final p = params[i];
+      if (i < args.length) {
+        scope.vars[p.name] = args[i];
+      } else if (kwargs.containsKey(p.name)) {
+        scope.vars[p.name] = kwargs[p.name];
+      } else if (fn.defaults.containsKey(p.name)) {
+        scope.vars[p.name] = fn.defaults[p.name];
+      } else {
+        throw PyRuntimeError("${fn.name}() missing required argument: '${p.name}'", line);
+      }
+    }
+    for (final k in kwargs.keys) {
+      if (!params.any((p) => p.name == k)) {
+        throw PyRuntimeError("${fn.name}() got an unexpected keyword argument '$k'", line);
+      }
+    }
+    if (fn.lambdaBody != null) return eval(fn.lambdaBody!, scope);
+    try {
+      await execBlock(fn.body, scope);
+    } on _ReturnSignal catch (r) {
+      return r.value;
+    }
+    return null;
+  }
+}
+
+/// Short, kid-readable reason for a Dart error raised inside a builtin.
+String _dartErrorReason(Object e) {
+  if (e is StackOverflowError) return 'value is nested too deeply (or contains itself)';
+  if (e is UnsupportedError && '${e.message}'.contains('Infinity or NaN')) {
+    return 'cannot convert infinity or NaN to an integer';
+  }
+  if (e is RangeError || e is StateError) return 'missing argument or value out of range';
+  if (e is ArgumentError) return 'invalid argument';
+  if (e is FormatException) return e.message;
+  return 'internal error (${e.runtimeType})';
 }
