@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import '../models/tutorial_data.dart';
+import 'python_bus.dart';
+
+/// Index of the Blocks tab in the dashboard's bottom navigation.
+const int _blocksTabIndex = 1;
 
 class TutorialDetailPage extends StatelessWidget {
   final TutorialData tutorial;
@@ -27,8 +31,7 @@ class TutorialDetailPage extends StatelessWidget {
                 const SizedBox(height: 12),
                 _buildConceptBox(),
                 const SizedBox(height: 32),
-                _buildSectionTitle(
-                    "Block Coding Steps", Icons.account_tree_outlined),
+                _buildSectionTitle("Steps", Icons.account_tree_outlined),
                 const SizedBox(height: 16),
                 _buildStepsList(),
                 const SizedBox(height: 48),
@@ -133,12 +136,14 @@ class TutorialDetailPage extends StatelessWidget {
       children: [
         Icon(icon, color: const Color(0xFF6366F1), size: 28),
         const SizedBox(width: 8),
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF1F2937),
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF1F2937),
+            ),
           ),
         ),
       ],
@@ -326,9 +331,22 @@ class TutorialDetailPage extends StatelessWidget {
   Widget _buildVisualBlock(VisualBlockNode node) {
     final Color blockColor = node.color;
 
+    // A lone boolean block (e.g. a comparison) is drawn as a hexagon, like in
+    // the editor, rather than as a statement block with notches.
+    if (node.isBoolean) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: _buildConditionChip('${node.emoji}  ${node.label}', blockColor),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Container(
+        width: double.infinity,
         decoration: BoxDecoration(
           color: blockColor,
           borderRadius: BorderRadius.circular(9),
@@ -347,53 +365,41 @@ class TutorialDetailPage extends StatelessWidget {
             // ── Puzzle top notch ──────────────────────────────────────────
             _buildNotch(blockColor, isTop: true),
 
-            // ── Block face row ────────────────────────────────────────────
+            // ── Block face ────────────────────────────────────────────────
+            // A Wrap (not a Row) so a long label or condition chip moves to
+            // the next line instead of overflowing on narrow phones.
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  Text(node.emoji,
-                      style: const TextStyle(fontSize: 18)),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      node.label,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                      ),
+                  Text(node.emoji, style: const TextStyle(fontSize: 18)),
+                  Text(
+                    node.label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
                     ),
                   ),
                   // Inline condition chip (for If/While condition slot)
-                  if (node.inlineCondition != null) ...[
-                    const SizedBox(width: 10),
-                    _buildConditionChip(
-                        node.inlineCondition!, node.chipColor),
-                  ],
+                  if (node.inlineCondition != null)
+                    _buildConditionChip(node.inlineCondition!, node.chipColor),
                 ],
               ),
             ),
 
-            // ── Body (do / then slot) ─────────────────────────────────────
+            // ── Body (do / then do slot) ──────────────────────────────────
             if (node.bodyNodes.isNotEmpty)
-              Container(
-                margin: const EdgeInsets.only(left: 20, right: 8, bottom: 10),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(7),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: node.bodyNodes
-                      .map((child) => _buildVisualBlock(child))
-                      .toList(),
-                ),
+              _buildSlot(
+                node.elseNodes.isNotEmpty ? 'then do' : null,
+                node.bodyNodes,
               ),
+
+            // ── Else slot (If / Else blocks) ──────────────────────────────
+            if (node.elseNodes.isNotEmpty) _buildSlot('else do', node.elseNodes),
 
             // ── Puzzle bottom notch ───────────────────────────────────────
             _buildNotch(blockColor, isTop: false),
@@ -403,27 +409,54 @@ class TutorialDetailPage extends StatelessWidget {
     );
   }
 
-  /// Renders a small hexagonal/pill-shaped condition chip that mimics the
-  /// boolean sensor blocks used in the block editor.
-  Widget _buildConditionChip(String text, Color chipColor) {
-    return CustomPaint(
-      painter: _HexChipPainter(color: chipColor),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(
+  /// A nested slot (do / then do / else do) holding child blocks.
+  Widget _buildSlot(String? label, List<VisualBlockNode> nodes) {
+    return Container(
+      margin: const EdgeInsets.only(left: 14, right: 6, bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (label != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
               child: Text(
-                text,
+                label,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
-          ],
+          ...nodes.map(_buildVisualBlock),
+        ],
+      ),
+    );
+  }
+
+  /// Renders a hexagonal condition chip that mimics the boolean blocks used
+  /// in the block editor. The text wraps (up to 4 lines) and never overflows.
+  Widget _buildConditionChip(String text, Color chipColor) {
+    return CustomPaint(
+      painter: _HexChipPainter(color: chipColor),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+        child: Text(
+          text,
+          softWrap: true,
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+          ),
         ),
       ),
     );
@@ -443,7 +476,11 @@ class TutorialDetailPage extends StatelessWidget {
 
   Widget _buildCodeNowButton(BuildContext context) {
     return InkWell(
-      onTap: () => Navigator.of(context).popUntil((route) => route.isFirst),
+      onTap: () {
+        // Ask the dashboard to show the Blocks tab, then return to it.
+        PythonBus.requestedTab.value = _blocksTabIndex;
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      },
       borderRadius: BorderRadius.circular(20),
       child: Container(
         padding: const EdgeInsets.all(24),
