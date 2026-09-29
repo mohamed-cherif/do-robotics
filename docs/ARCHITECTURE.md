@@ -109,8 +109,9 @@ detector on the luminance plane instead. Details and measurements:
 a `FrameParser` for bytes coming back. Bluetooth connects to the robot
 picked in `RobotPickerDialog` (remembered), or to the first robot found
 before one was picked; FlutterBluePlus has a single scan for the whole
-app, so the list and connect() never scan at the same time. Every strategy sends a heartbeat
-every 500 ms; the firmware stops all outputs after 2 s of silence. Text
+app, so the list and connect() never scan at the same time. Every
+strategy sends a heartbeat every 500 ms; the firmware stops all outputs
+after 2 s of silence. Text
 frames (`0xAB`) carry WiFi setup and status, and the board's `ERR` /
 `WATCHDOG` messages, which `ConnectivityManager.logLineFor` puts in the
 program log. The sketches' logic is tested on the computer by
@@ -122,9 +123,9 @@ stand-ins for the Arduino, BLE and WiFi APIs). Protocol constants live only in
 
 `SharedPreferences` only: configured actuators, saved block scripts
 (`saved_scripts/<name>`), the block editor's autosaved draft, Python scripts
-and draft, vision settings, last transport and WiFi host. Block scripts are
-JSON (`BlockInstance.listToJson` / `loadScript`, which never throws and
-reports skipped blocks).
+and draft, vision settings, last transport, WiFi host and chosen Bluetooth
+robot. Block scripts are JSON (`BlockInstance.listToJson` / `loadScript`,
+which never throws and reports skipped blocks).
 
 ## Adding things
 
