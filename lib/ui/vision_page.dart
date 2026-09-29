@@ -214,7 +214,12 @@ class _VisionPageState extends State<VisionPage> {
           Positioned(
             top: 40,
             left: 20,
+            // heroTag: null on every FAB here — several FABs with the default
+            // tag on one page trip Flutter's duplicate-Hero assertion when a
+            // route is pushed (e.g. opening Vision Settings).
             child: FloatingActionButton.small(
+              heroTag: null,
+              tooltip: 'Back',
               backgroundColor: Colors.black54,
               child: const Icon(Icons.arrow_back, color: Colors.white),
               onPressed: () {
@@ -229,6 +234,8 @@ class _VisionPageState extends State<VisionPage> {
              bottom: 100,
              right: 20,
              child: FloatingActionButton(
+               heroTag: null,
+               tooltip: _fit == BoxFit.cover ? 'Show whole camera view' : 'Fill the screen',
                backgroundColor: const Color(0xFF00FFCC),
                child: Icon(_fit == BoxFit.cover ? Icons.fullscreen_exit : Icons.fullscreen, color: Colors.black),
                onPressed: () {
@@ -243,7 +250,10 @@ class _VisionPageState extends State<VisionPage> {
           Positioned(
             top: 50,
             right: 20,
-            child: GestureDetector(
+            child: Semantics(
+              button: true,
+              label: 'Vision settings',
+              child: GestureDetector(
               onTap: () async {
                 await Navigator.push(
                   context,
@@ -285,6 +295,7 @@ class _VisionPageState extends State<VisionPage> {
                 ),
               ),
             ),
+            ),
           ),
           
           // 6. Filter Selection Button
@@ -296,6 +307,7 @@ class _VisionPageState extends State<VisionPage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 FloatingActionButton.extended(
+                  heroTag: null,
                   backgroundColor: const Color(0xFF00FFCC),
                   icon: const Icon(Icons.filter_list, color: Colors.black),
                   label: Text(
@@ -307,6 +319,8 @@ class _VisionPageState extends State<VisionPage> {
                 if (_activeFilters.isNotEmpty) ...[
                    const SizedBox(width: 10),
                    FloatingActionButton.small(
+                     heroTag: null,
+                     tooltip: 'Detect everything again',
                      backgroundColor: Colors.redAccent,
                      child: const Icon(Icons.clear, color: Colors.white),
                      onPressed: () async {

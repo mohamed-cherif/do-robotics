@@ -242,7 +242,13 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
 
   Widget _buildNavItem(int index, IconData icon, String label) {
     final isSelected = _selectedIndex == index;
-    return InkWell(
+    // Unselected tabs are icon-only: give screen readers the name.
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label: label,
+      excludeSemantics: true,
+      child: InkWell(
       onTap: () => setState(() => _selectedIndex = index),
       borderRadius: BorderRadius.circular(16),
       child: AnimatedContainer(
@@ -272,6 +278,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             ],
           ],
         ),
+      ),
       ),
     );
   }

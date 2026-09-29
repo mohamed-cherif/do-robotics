@@ -257,7 +257,10 @@ class _MicrophonePageState extends State<MicrophonePage> with SingleTickerProvid
 
   Widget _buildControlSection() {
     return Center(
-      child: GestureDetector(
+      child: Semantics(
+        button: true,
+        label: _isListening ? 'Stop listening' : 'Start listening',
+        child: GestureDetector(
         onTap: () {
            if (_isListening) {
              _stopListening();
@@ -294,6 +297,7 @@ class _MicrophonePageState extends State<MicrophonePage> with SingleTickerProvid
             );
           },
         ),
+      ),
       ),
     );
   }

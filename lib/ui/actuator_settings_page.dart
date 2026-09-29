@@ -126,11 +126,13 @@ class _ActuatorSettingsPageState extends State<ActuatorSettingsPage> {
               onPressed: () => _showEditActuatorDialog(actuator),
               icon: const Icon(Icons.edit_outlined),
               color: const Color(0xFF6366F1),
+              tooltip: 'Edit ${actuator.name}',
             ),
             IconButton(
               onPressed: () => _confirmDelete(actuator),
               icon: const Icon(Icons.delete_outline),
               color: Colors.red,
+              tooltip: 'Delete ${actuator.name}',
             ),
           ],
         ),

@@ -151,6 +151,7 @@ class _RobotWifiSetupDialogState extends State<RobotWifiSetupDialog> {
               decoration: InputDecoration(
                 labelText: 'Password',
                 suffixIcon: IconButton(
+                  tooltip: _hidePass ? 'Show password' : 'Hide password',
                   icon: Icon(_hidePass ? Icons.visibility : Icons.visibility_off),
                   onPressed: () => setState(() => _hidePass = !_hidePass),
                 ),
