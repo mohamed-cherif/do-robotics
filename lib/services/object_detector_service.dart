@@ -11,15 +11,21 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'vision_preferences.dart';
 
 class DetectionResult {
+  /// Normalized box in *screen* coordinates (portrait camera preview), for
+  /// drawing and tap-to-lock.
   final Rect boundingBox;
+  /// Normalized box in the *upright* picture the model saw — the robot's own
+  /// left/right/up/down whatever the phone mount. Used for steering.
+  final Rect uprightBox;
   final String label;
   final double score;
 
   DetectionResult({
     required this.boundingBox,
+    Rect? uprightBox,
     required this.label,
     required this.score,
-  });
+  }) : uprightBox = uprightBox ?? boundingBox;
 
   @override
   String toString() => 'DetectionResult(label: $label, score: $score, bbox: $boundingBox)';
@@ -157,7 +163,11 @@ class ObjectDetectorService {
 
   DateTime _lastProcessTime = DateTime.fromMillisecondsSinceEpoch(0);
 
-  void processFrame(CameraImage cameraImage, {List<String> activeLabels = const [], int rotation = 90}) {
+  /// [rotation]: clockwise turn that makes the frame upright for the model.
+  /// [displayNet]: clockwise turn from that upright picture to the screen
+  /// preview (0 when the phone is upright, 180 when mounted upside down).
+  void processFrame(CameraImage cameraImage,
+      {List<String> activeLabels = const [], int rotation = 90, int displayNet = 0}) {
     if (!_isReady || _isProcessing) return;
 
     final now = DateTime.now();
@@ -183,6 +193,7 @@ class ObjectDetectorService {
       width: cameraImage.width,
       format: cameraImage.format.raw,
       rotation: rotation,
+      displayNet: displayNet,
       activeLabels: activeLabels,
       lineMode: lineMode,
       threshold: confidenceThreshold,
@@ -368,20 +379,10 @@ class ObjectDetectorService {
             final double yb = rawBox[2].clamp(0.0, 1.0);
             final double xr = rawBox[3].clamp(0.0, 1.0);
 
-            // CameraPreview always applies 90° rotation (sensorOrientation for portrait).
-            // _directToTensor applied message.rotation.
-            // Net rotation from tensor space → display space = (90 - rotation + 360) % 360.
-            final int net = (90 - message.rotation + 360) % 360;
-            final Rect displayBox;
-            if (net == 180) {
-              displayBox = Rect.fromLTRB(1.0 - xr, 1.0 - yb, 1.0 - xt, 1.0 - yt);
-            } else if (net == 90) {
-              displayBox = Rect.fromLTRB(yt, 1.0 - xr, yb, 1.0 - xt);
-            } else if (net == 270) {
-              displayBox = Rect.fromLTRB(1.0 - yb, xt, 1.0 - yt, xr);
-            } else {
-              displayBox = Rect.fromLTRB(xt, yt, xr, yb);
-            }
+            // The tensor was rotated upright, so its box is already in the
+            // robot's frame; the screen preview may be turned from it.
+            final uprightBox = Rect.fromLTRB(xt, yt, xr, yb);
+            final displayBox = uprightToDisplay(uprightBox, message.displayNet);
             if (displayBox.width <= 0 || displayBox.height <= 0) continue;
 
             // labelmap.txt line 0 is the '???' background placeholder.
@@ -397,6 +398,7 @@ class ObjectDetectorService {
 
             results.add(DetectionResult(
               boundingBox: displayBox,
+              uprightBox: uprightBox,
               label: label,
               score: score,
             ));
@@ -408,6 +410,21 @@ class ObjectDetectorService {
           mainSendPort.send(<DetectionResult>[]);
         }
       }
+    }
+  }
+
+  /// Maps a normalized box from the upright picture to the screen preview,
+  /// which is turned [net] degrees clockwise from it. Public for tests.
+  static Rect uprightToDisplay(Rect b, int net) {
+    switch (net % 360) {
+      case 180:
+        return Rect.fromLTRB(1.0 - b.right, 1.0 - b.bottom, 1.0 - b.left, 1.0 - b.top);
+      case 90:
+        return Rect.fromLTRB(1.0 - b.bottom, b.left, 1.0 - b.top, b.right);
+      case 270:
+        return Rect.fromLTRB(b.top, 1.0 - b.right, b.bottom, 1.0 - b.left);
+      default:
+        return b;
     }
   }
 
@@ -571,8 +588,9 @@ class ObjectDetectorService {
 
   /// Line detection on a raw luminance plane. [rotation] is the clockwise
   /// rotation (0/90/180/270) that makes the sensor frame upright, exactly as
-  /// passed to the object detector. The offset uses the same display-space
-  /// convention as object bounding boxes. Public for tests.
+  /// passed to the object detector. The offset is in the robot's frame
+  /// (−1 = tape on the robot's left), whatever the phone mount. Public for
+  /// tests.
   static LineDetectionResult detectLineInLuma(
       Uint8List luma, int bytesPerRow, int srcW, int srcH, int rotation) {
     const none = LineDetectionResult(offsetX: 0.0, detected: false, confidence: 0.0);
@@ -648,11 +666,7 @@ class ObjectDetectorService {
     }
     final double centerCol = weightSum > 0 ? weighted / weightSum : bestCol.toDouble();
 
-    double offsetX = (centerCol / uW - 0.5) * 2.0;
-    // Same convention as object boxes: when the display is rotated 180° from
-    // the upright frame (phone set to "mounted upside down"), left and right
-    // swap. See the net-rotation mapping in the detection loop.
-    if ((90 - rotation + 360) % 360 == 180) offsetX = -offsetX;
+    final double offsetX = (centerCol / uW - 0.5) * 2.0;
     return LineDetectionResult(offsetX: offsetX, detected: detected, confidence: confidence);
   }
 
@@ -755,6 +769,7 @@ class _FrameCmd {
   final int width;
   final int format;
   final int rotation;
+  final int displayNet;
   final List<String> activeLabels;
   final bool lineMode;
   final double threshold;
@@ -765,6 +780,7 @@ class _FrameCmd {
     required this.width,
     required this.format,
     required this.rotation,
+    this.displayNet = 0,
     this.activeLabels = const [],
     this.lineMode = false,
     this.threshold = 0.35,

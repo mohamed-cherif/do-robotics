@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'ui/dashboard_page.dart';
 import 'ui/vision_settings_page.dart';
 import 'services/actuator_service.dart';
@@ -7,6 +8,9 @@ import 'services/connectivity/connectivity_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Portrait only: the camera/vision pipeline and the block editor are laid
+  // out for it, and a robot bumping around must not rotate the UI.
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   await ActuatorService().initialize();
   await ConnectivityManager().loadPreferences();
   AppLifecycleGuard.instance.start();

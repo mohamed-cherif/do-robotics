@@ -2,25 +2,34 @@ import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../utils/shared_lease.dart';
+import 'mount_detector.dart';
 import 'object_detector_service.dart';
+import 'sensor_service.dart';
 import 'vision_preferences.dart';
 
 class DetectedObjectData {
+  /// Screen (preview) coordinates, 0..1 — for drawing and tap-to-lock.
   final Rect boundingBox;
+  /// Upright-picture coordinates, 0..1 — the robot's frame, for steering.
+  final Rect uprightBox;
   final List<String> labels;
   final double confidence;
 
-  DetectedObjectData(this.boundingBox, this.labels, [this.confidence = 0.0]);
+  DetectedObjectData(this.boundingBox, this.labels, [this.confidence = 0.0, Rect? uprightBox])
+      : uprightBox = uprightBox ?? boundingBox;
 
   String get label => labels.isNotEmpty ? labels.first : 'unknown';
 }
 
 /// Camera ownership + object tracking on top of [ObjectDetectorService].
 ///
-/// Bounding boxes are normalized (0..1) in *display* space (portrait preview).
-/// `targetOffsetX/Y` are -1..+1 with 0 at the frame centre; `targetArea` is
-/// the tracked box area as a percentage of the frame (a "closeness" proxy).
+/// Bounding boxes are normalized (0..1): `boundingBox` in screen space (the
+/// portrait preview), `uprightBox` in the upright picture the model saw.
+/// `targetOffsetX/Y` (-1..+1, 0 = centre) and `targetArea` (% of the frame,
+/// a "closeness" proxy) come from the upright box, so they are in the
+/// robot's own frame whether the phone is mounted upright or upside down.
 class VisionService {
   static final VisionService _instance = VisionService._internal();
   factory VisionService() => _instance;
@@ -40,8 +49,15 @@ class VisionService {
   bool get isInitialized => _isInitialized;
   bool get isStreaming => _camera?.value.isStreamingImages ?? false;
 
-  /// Phone mounted inverted on the robot. Loaded from [VisionPreferences].
-  bool upsideDown = false;
+  /// How the phone is attached to the robot (from [VisionPreferences]).
+  PhoneMount mount = PhoneMount.auto;
+  final MountDetector _mountDetector = MountDetector();
+  /// Whether the camera picture is currently treated as upside down.
+  bool get upsideDown => switch (mount) {
+        PhoneMount.upright => false,
+        PhoneMount.upsideDown => true,
+        PhoneMount.auto => _mountDetector.upsideDown,
+      };
   /// When true, run Sobel line detection instead of TFLite.
   bool lineMode = false;
 
@@ -93,26 +109,25 @@ class VisionService {
 
   String get targetLabel => trackedObject?.label ?? "None";
 
-  /// -1.0 (left) .. +1.0 (right), 0 = centred. Coordinates are already in
-  /// physical phone-left/right space, so no sign flip is applied here.
+  /// -1.0 (robot's left) .. +1.0 (robot's right), 0 = centred.
   double get targetOffsetX {
     final t = trackedObject;
     if (t == null) return 0.0;
-    return (t.boundingBox.center.dx - 0.5) * 2;
+    return (t.uprightBox.center.dx - 0.5) * 2;
   }
 
-  /// -1.0 (top) .. +1.0 (bottom).
+  /// -1.0 (top) .. +1.0 (bottom), in the upright picture.
   double get targetOffsetY {
     final t = trackedObject;
     if (t == null) return 0.0;
-    return (t.boundingBox.center.dy - 0.5) * 2;
+    return (t.uprightBox.center.dy - 0.5) * 2;
   }
 
   /// Tracked box area as a percentage (0..100) of the frame.
   double get targetArea {
     final t = trackedObject;
     if (t == null) return 0.0;
-    final r = t.boundingBox;
+    final r = t.uprightBox;
     return (r.width * r.height) * 100.0;
   }
 
@@ -126,7 +141,7 @@ class VisionService {
   }
 
   Future<void> _refreshSettings() async {
-    upsideDown = await VisionPreferences.getUpsideDown();
+    mount = await VisionPreferences.getMount();
     _detector.confidenceThreshold = await VisionPreferences.getConfidenceThreshold();
     // Frame rate applies immediately; the thread count on the next camera start.
     _detector.performance = await VisionPreferences.getPerformance();
@@ -290,7 +305,7 @@ class VisionService {
   void _onDetections(List<DetectionResult> results) {
     _lastResultAt = clock();
     final mapped = results
-        .map((r) => DetectedObjectData(r.boundingBox, [r.label], r.score))
+        .map((r) => DetectedObjectData(r.boundingBox, [r.label], r.score, r.uprightBox))
         .toList();
     _lastDetections = mapped;
 
@@ -339,6 +354,15 @@ class VisionService {
     );
     try {
       await controller.initialize();
+      // The app is portrait-only; pin the preview to portrait too, so the
+      // screen boxes line up whatever the phone's physical orientation.
+      try {
+        await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
+      } catch (e) {
+        debugPrint('Camera: could not lock capture orientation: $e');
+      }
+      // Automatic mount detection reads gravity from the IMU.
+      SensorService().startListening();
       _camera = controller;
       await controller.startImageStream(_onCameraImage);
       debugPrint('✅ Camera stream started');
@@ -354,32 +378,28 @@ class VisionService {
 
   void _onCameraImage(CameraImage cameraImage) {
     if (!_isInitialized) return;
+    if (mount == PhoneMount.auto) {
+      final g = SensorService().gravity;
+      _mountDetector.update(g[0], g[1], g[2], DateTime.now());
+    }
+    final sensorOrientation = _camera?.description.sensorOrientation ?? 90;
+    final rotation = frameRotation(sensorOrientation, upsideDown);
     _detector.lineMode = lineMode;
     _detector.processFrame(
       cameraImage,
       activeLabels: _activeFilters,
-      rotation: _computeFrameRotation(),
+      rotation: rotation,
+      // The preview shows the sensor picture turned by sensorOrientation.
+      displayNet: (sensorOrientation - rotation + 360) % 360,
     );
   }
 
-  /// Rotation the tensor pipeline must apply so the model sees an upright image.
-  ///
-  /// Back cameras are usually mounted at sensorOrientation 90°. In landscape the
-  /// device has rotated 90° too, so the net correction is 0°. Mounted upside
-  /// down, the net correction is sensorOrientation + 180.
-  int _computeFrameRotation() {
-    final sensorOrientation = _camera?.description.sensorOrientation ?? 90;
-    final view = WidgetsBinding.instance.platformDispatcher.views.firstOrNull;
-    final physicalSize = view?.physicalSize ?? const Size(1080, 1920);
-    final isLandscape = physicalSize.width > physicalSize.height;
-    int deviceRotation = 0;
-    if (isLandscape) {
-      deviceRotation = 90;
-    } else if (upsideDown) {
-      deviceRotation = -180;
-    }
-    return (sensorOrientation - deviceRotation + 360) % 360;
-  }
+  /// Clockwise rotation that turns a camera frame upright for the model.
+  /// The UI is portrait-only, so this depends only on the camera sensor's
+  /// mounting in the phone and on whether the phone is upside down on the
+  /// robot. Public for tests.
+  static int frameRotation(int sensorOrientation, bool upsideDown) =>
+      (sensorOrientation + (upsideDown ? 180 : 0)) % 360;
 
   /// Completes once the next camera frame has been processed (object
   /// detections, or a line result in [lineMode]), or after [timeout].

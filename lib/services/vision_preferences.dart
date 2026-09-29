@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'mount_detector.dart';
+
 /// How much CPU (and battery) object detection may use.
 enum VisionPerformance {
   /// ~5 frames/s, 1 inference thread. Coolest and longest battery life.
@@ -26,7 +28,8 @@ class VisionPreferences {
   VisionPreferences._();
 
   static const String _keyEnabledLabels = 'vision_enabled_labels_v2';
-  static const String _keyUpsideDown = 'vision_upside_down';
+  static const String _keyUpsideDown = 'vision_upside_down'; // legacy bool
+  static const String _keyMount = 'vision_mount';
   static const String _keyConfidence = 'vision_confidence';
   static const String _keyPerformance = 'vision_performance';
 
@@ -66,15 +69,21 @@ class VisionPreferences {
     _labelChanges.add(labels);
   }
 
-  /// True when the phone is mounted screen-down / inverted on the robot.
-  static Future<bool> getUpsideDown() async {
+  /// How the phone is attached to the robot. Defaults to automatic; a
+  /// previously saved "mounted upside down" switch is honoured.
+  static Future<PhoneMount> getMount() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyUpsideDown) ?? false;
+    final name = prefs.getString(_keyMount);
+    if (name != null) {
+      return PhoneMount.values.firstWhere((m) => m.name == name, orElse: () => PhoneMount.auto);
+    }
+    return (prefs.getBool(_keyUpsideDown) ?? false) ? PhoneMount.upsideDown : PhoneMount.auto;
   }
 
-  static Future<void> setUpsideDown(bool value) async {
+  static Future<void> setMount(PhoneMount value) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyUpsideDown, value);
+    await prefs.setString(_keyMount, value.name);
+    await prefs.remove(_keyUpsideDown);
     _settingsChanges.add(null);
   }
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/mount_detector.dart';
 import '../services/vision_preferences.dart';
 
 /// Which objects the camera should look for, how the phone is mounted, and
@@ -12,7 +13,7 @@ class VisionSettingsPage extends StatefulWidget {
 
 class _VisionSettingsPageState extends State<VisionSettingsPage> {
   Set<String> _selectedLabels = {};
-  bool _upsideDown = false;
+  PhoneMount _mount = PhoneMount.auto;
   double _confidence = VisionPreferences.defaultConfidence;
   VisionPerformance _performance = VisionPerformance.fast;
   bool _isLoading = true;
@@ -26,13 +27,13 @@ class _VisionSettingsPageState extends State<VisionSettingsPage> {
 
   Future<void> _loadSettings() async {
     final labels = await VisionPreferences.getEnabledLabels();
-    final upsideDown = await VisionPreferences.getUpsideDown();
+    final mount = await VisionPreferences.getMount();
     final confidence = await VisionPreferences.getConfidenceThreshold();
     final performance = await VisionPreferences.getPerformance();
     if (!mounted) return;
     setState(() {
       _selectedLabels = labels;
-      _upsideDown = upsideDown;
+      _mount = mount;
       _confidence = confidence;
       _performance = performance;
       _isLoading = false;
@@ -41,7 +42,7 @@ class _VisionSettingsPageState extends State<VisionSettingsPage> {
 
   Future<void> _saveSettings() async {
     await VisionPreferences.setEnabledLabels(_selectedLabels);
-    await VisionPreferences.setUpsideDown(_upsideDown);
+    await VisionPreferences.setMount(_mount);
     await VisionPreferences.setConfidenceThreshold(_confidence);
     await VisionPreferences.setPerformance(_performance);
     if (mounted) {
@@ -79,21 +80,36 @@ class _VisionSettingsPageState extends State<VisionSettingsPage> {
                     children: [
                       _card(
                         title: 'Phone mounting',
-                        child: SwitchListTile(
-                          contentPadding: EdgeInsets.zero,
-                          value: _upsideDown,
-                          onChanged: (v) => setState(() => _upsideDown = v),
-                          activeTrackColor: Colors.greenAccent,
-                          title: const Text('Mounted upside down',
-                              style: TextStyle(color: Colors.white)),
-                          subtitle: const Text(
-                            'Turn on if the phone is fixed to the robot with the '
-                            'top of the screen pointing at the floor, so the AI '
-                            'sees the picture the right way up. If the robot then '
-                            'turns the wrong way, set Smart Follow\'s steering to '
-                            'REVERSED (or flip the sign in your program).',
-                            style: TextStyle(color: Colors.white60, fontSize: 12),
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            RadioGroup<PhoneMount>(
+                              groupValue: _mount,
+                              onChanged: (v) => setState(() => _mount = v ?? _mount),
+                              child: Column(
+                                children: [
+                                  for (final m in PhoneMount.values)
+                                    RadioListTile<PhoneMount>(
+                                      contentPadding: EdgeInsets.zero,
+                                      dense: true,
+                                      value: m,
+                                      activeColor: Colors.greenAccent,
+                                      title: Text(
+                                          m == PhoneMount.auto ? '${m.label} (recommended)' : m.label,
+                                          style: const TextStyle(color: Colors.white)),
+                                      subtitle: Text(m.description,
+                                          style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            const Text(
+                              'Only turns the camera picture so the AI sees it the right '
+                              'way up. Left and right always mean the robot\'s left and '
+                              'right, so steering never flips.',
+                              style: TextStyle(color: Colors.white60, fontSize: 12),
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 12),

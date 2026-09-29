@@ -67,13 +67,13 @@ void main() {
     expect(r.offsetX, closeTo(-0.5, 0.05));
   });
 
-  test('upside-down mount (rotation 270) uses the display convention of object boxes', () {
+  test('upside-down mount (rotation 270): offset stays in the robot frame', () {
     final luma = sensorFrame(srcW: w, srcH: h, rotation: 270, bytesPerRow: w, isLine: tapeAt(0.75));
     final r = ObjectDetectorService.detectLineInLuma(luma, w, w, h, 270);
     expect(r.detected, isTrue);
-    // Object boxes are mapped to display space with a 180° flip for this
-    // mount, so the line offset flips too.
-    expect(r.offsetX, closeTo(-0.5, 0.05));
+    // Tape on the robot's right reads positive whatever way the phone is
+    // mounted, so a line-follower program never has to flip its steering.
+    expect(r.offsetX, closeTo(0.5, 0.05));
   });
 
   test('only the floor band counts: a line in the top half is ignored', () {
