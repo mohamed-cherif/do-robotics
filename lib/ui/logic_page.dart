@@ -680,8 +680,11 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
           );
 
           // Chain: forward → stop → left → right
-          ifForward.nextBlock = ifStop;
-          ifStop.nextBlock    = ifLeft;
+          // "stop" is checked first: recognized text accumulates, so after
+          // "forward ... stop" the forward check would match first and
+          // consume the text, losing the stop command.
+          ifStop.nextBlock    = ifForward;
+          ifForward.nextBlock = ifLeft;
           ifLeft.nextBlock    = ifRight;
 
           // while(true) wrapper keeps listening forever (like Arduino loop())
@@ -693,7 +696,7 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
                 instanceId: _uuid.v4(),
                 definition: boolTrueDef,
               ),
-              'do': ifForward,
+              'do': ifStop,
             },
           );
           outerWhile.position = const Offset(100, 100);
@@ -910,25 +913,28 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
             },
           );
 
-          // if tiltY > 15 → pivot right (left motor drives, right stops)
+          // Tilt Roll is negative when the phone is tilted right (right edge
+          // down). The snippet used to pivot right on roll > 15, i.e. it
+          // turned the opposite way to the tilt.
+          // if tiltY < -15 → pivot right (left motor drives, right stops)
           final ifRight = BlockInstance(
-            instanceId: _uuid.v4(),
-            definition: ifDef,
-            nestedBlocks: {
-              'condition': BlockInstance(instanceId: _uuid.v4(), definition: gtDef,
-                nestedBlocks: {'left': tiltY(), 'right': num(15)}),
-              'then': motorBlock(leftDef, 'FORWARD', 150)
-                ..nextBlock = motorBlock(rightDef, 'STOP', 0),
-            },
-          );
-
-          // if tiltY < -15 → pivot left (right motor drives, left stops)
-          final ifLeft = BlockInstance(
             instanceId: _uuid.v4(),
             definition: ifDef,
             nestedBlocks: {
               'condition': BlockInstance(instanceId: _uuid.v4(), definition: ltDef,
                 nestedBlocks: {'left': tiltY(), 'right': num(-15)}),
+              'then': motorBlock(leftDef, 'FORWARD', 150)
+                ..nextBlock = motorBlock(rightDef, 'STOP', 0),
+            },
+          );
+
+          // if tiltY > 15 → pivot left (right motor drives, left stops)
+          final ifLeft = BlockInstance(
+            instanceId: _uuid.v4(),
+            definition: ifDef,
+            nestedBlocks: {
+              'condition': BlockInstance(instanceId: _uuid.v4(), definition: gtDef,
+                nestedBlocks: {'left': tiltY(), 'right': num(15)}),
               'then': motorBlock(leftDef, 'STOP', 0)
                 ..nextBlock = motorBlock(rightDef, 'FORWARD', 150),
             },

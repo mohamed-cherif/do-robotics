@@ -290,10 +290,10 @@ while True:
     elif pitch > 20:
         left.backward(200)
         right.backward(200)
-    elif roll > 20:
+    elif roll < -20:        # tilted right (roll is negative) -> spin right
         left.forward(180)
         right.backward(180)
-    elif roll < -20:
+    elif roll > 20:         # tilted left -> spin left
         left.backward(180)
         right.forward(180)
     else:

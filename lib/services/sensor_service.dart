@@ -6,11 +6,14 @@ import 'package:sensors_plus/sensors_plus.dart';
 class SensorMath {
   SensorMath._();
 
-  /// Pitch in degrees from a gravity vector. 0° = flat, positive = tilted forward.
+  /// Pitch in degrees from a gravity vector (accelerometer, device frame).
+  /// 0° = flat; negative = top edge lowered (tilted forward, away from you),
+  /// positive = top edge raised.
   static double pitchDeg(double gx, double gy, double gz) =>
       math.atan2(gy, gz) * 180 / math.pi;
 
-  /// Roll in degrees from a gravity vector. 0° = flat, positive = tilted right.
+  /// Roll in degrees from a gravity vector. 0° = flat; negative = right edge
+  /// lowered (tilted right), positive = tilted left.
   static double rollDeg(double gx, double gy, double gz) =>
       math.atan2(gx, gz) * 180 / math.pi;
 
@@ -130,10 +133,10 @@ class SensorService {
 
   // ── Public computed values ─────────────────────────────────────────────────
 
-  /// Pitch angle in degrees. 0° = flat/horizontal. Positive = tilted forward.
+  /// Pitch angle in degrees. 0° = flat. Negative = tilted forward (top edge down).
   double get tiltX => SensorMath.pitchDeg(_gravX, _gravY, _gravZ);
 
-  /// Roll angle in degrees. 0° = flat/horizontal. Positive = tilted right.
+  /// Roll angle in degrees. 0° = flat. Negative = tilted right, positive = left.
   double get tiltY => SensorMath.rollDeg(_gravX, _gravY, _gravZ);
 
   /// True when the phone is tilted more than [tiltThresholdDeg] on either axis.

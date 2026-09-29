@@ -170,7 +170,7 @@ class _AccelerometerPageState extends State<AccelerometerPage> {
                 _BlockOutput(
                   emoji: "📏",
                   label: "Tilt Roll°",
-                  description: "Numeric: ${_roll.toStringAsFixed(1)}°  (left/right tilt)",
+                  description: "Numeric: ${_roll.toStringAsFixed(1)}°  (− = tilted right, + = tilted left)",
                   active: true,
                   color: Colors.orange,
                 ),

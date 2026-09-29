@@ -46,6 +46,18 @@ void main() {
     });
   });
 
+  group('tilt sign convention (Android/iOS accelerometer reads +g "up")', () {
+    test('tilting the phone right (right edge down) gives negative roll', () {
+      // Device lying flat, rolled 30° so its right edge (+X) points down:
+      // the up vector in device coordinates is (-sin30°, 0, cos30°).
+      expect(SensorMath.rollDeg(-9.8 * 0.5, 0, 9.8 * 0.866), closeTo(-30, 0.1));
+    });
+
+    test('tilting the top edge away (forward) gives negative pitch', () {
+      expect(SensorMath.pitchDeg(0, -9.8 * 0.5, 9.8 * 0.866), closeTo(-30, 0.1));
+    });
+  });
+
   group('yaw rate about the vertical axis', () {
     test('flat phone: yaw is the gyro Z rate', () {
       expect(SensorMath.yawRateRadS(0, 0, 1.2, 0, 0, 9.8), closeTo(1.2, 1e-9));

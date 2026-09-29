@@ -10,7 +10,7 @@ void main() {
       expect(SensorMath.rollDeg(0, 0, 9.8), closeTo(0, 1e-6));
     });
 
-    test('45° forward tilt reads 45° pitch', () {
+    test('45° tilt with the top edge raised reads +45° pitch', () {
       final g = 9.8 / 1.4142135;
       expect(SensorMath.pitchDeg(0, g, g), closeTo(45, 1e-3));
     });
