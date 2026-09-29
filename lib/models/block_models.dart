@@ -119,12 +119,6 @@ class BlockInstance {
     return false;
   }
 
-  // Execute this block (to be used by interpreter)
-  dynamic getValue() {
-    // For expression/boolean blocks, evaluate and return
-    return inputValues;
-  }
-
   // ── Serialization ──────────────────────────────────────────────────────────
 
   Map<String, dynamic> toJson() {

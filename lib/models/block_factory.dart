@@ -985,21 +985,6 @@ class BlockFactory {
     );
   }
 
-  // Get all base blocks (non-actuator)
-  static List<BlockDefinition> getBaseBlocks() {
-    return [
-      objectDetectedBlock(),
-      ifBlock(),
-      whileBlock(),
-      repeatBlock(),
-      waitBlock(),
-      andBlock(),
-      orBlock(),
-      notBlock(),
-      printBlock(),
-    ];
-  }
-
   static List<BlockDefinition> getSensorBlocks() {
     return [
       objectDetectedBlock(),

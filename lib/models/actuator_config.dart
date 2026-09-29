@@ -67,8 +67,6 @@ class ActuatorConfig {
   // For continuous rotation servos (1300 = full reverse, 1500 = stop, 1700 = full forward)
   bool get isContinuous => parameters['continuous'] as bool? ?? false;
   int get continuousStopPwm => parameters['stopPwm'] as int? ?? 1500;
-  int get continuousMinPwm => parameters['minAngle'] as int? ?? 1300;
-  int get continuousMaxPwm => parameters['maxAngle'] as int? ?? 1700;
 
   Map<String, dynamic> toJson() {
     return {
@@ -89,8 +87,6 @@ class ActuatorConfig {
       parameters: json['parameters'] as Map<String, dynamic>? ?? {},
     );
   }
-
-  String toJsonString() => jsonEncode(toJson());
 
   factory ActuatorConfig.fromJsonString(String jsonString) {
     return ActuatorConfig.fromJson(jsonDecode(jsonString) as Map<String, dynamic>);

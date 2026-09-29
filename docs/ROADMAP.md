@@ -23,7 +23,7 @@ RoboPython) is in git history.
 - **Hardware presets** — one-tap configs for common kits (L298N 2WD car,
   TB6612, servo arm) with pin diagrams.
 - **Markers** — ArUco/AprilTag detection for "go to marker 3" navigation.
-- **Colour-blob tracking block** (the unused `ColorTracker` class is a start).
+- **Colour-blob tracking block** (an unused draft was removed in the audit; it is in git history).
 - **Wake word + parameterised voice commands** ("turn left 45").
 - **Accurate-model option** — EfficientDet-Lite1 on capable phones, gated
   by `tools/model_eval` results.

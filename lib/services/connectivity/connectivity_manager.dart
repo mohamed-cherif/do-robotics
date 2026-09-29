@@ -33,7 +33,6 @@ class BoardInfo {
   final String? ip;
   final String? name;
   const BoardInfo({this.type = 'unknown', this.firmware = '', this.ip, this.name});
-  bool get supportsWifiSetup => type == 'esp32';
   BoardInfo copyWith({String? type, String? firmware, String? ip, String? name}) =>
       BoardInfo(type: type ?? this.type, firmware: firmware ?? this.firmware, ip: ip ?? this.ip, name: name ?? this.name);
 }

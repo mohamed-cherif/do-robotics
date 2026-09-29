@@ -92,7 +92,6 @@ class BlockScriptRunner {
   BlockScriptRunner._internal();
 
   ExecutionState _state = ExecutionState.idle;
-  int _currentBlockIndex = -1;
   List<BlockInstance> _script = [];
 
   final StreamController<int> _executingBlockController = StreamController<int>.broadcast();
@@ -103,7 +102,6 @@ class BlockScriptRunner {
   /// Latest recognized speech while running ('' when idle or consumed).
   Stream<String> get voiceStream => _voice.wordsStream;
   ExecutionState get state => _state;
-  int get currentBlockIndex => _currentBlockIndex;
 
   // Service references
   final VisionService _visionService = VisionService();
@@ -152,7 +150,6 @@ class BlockScriptRunner {
     _logger.log("🟢 Program started");
     _state = ExecutionState.running;
     _stateController.add(_state);
-    _currentBlockIndex = -1;
     _driver.reset();
 
     await _startSensorListening(run);
@@ -168,7 +165,6 @@ class BlockScriptRunner {
     _logger.log("⏹️ Program stopped");
     _state = ExecutionState.idle;
     _stateController.add(_state);
-    _currentBlockIndex = -1;
     _executingBlockController.add(-1);
     _teardown = _finishRun();
   }
@@ -233,7 +229,6 @@ class BlockScriptRunner {
       for (int i = 0; i < _script.length; i++) {
         if (!run.active) break;
 
-        _currentBlockIndex = i;
         _executingBlockController.add(i);
 
         await _executeChain(_script[i], run);

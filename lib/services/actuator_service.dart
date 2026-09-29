@@ -110,10 +110,6 @@ class ActuatorService {
     }
   }
 
-  bool isPinAvailable(int pin, {String? excludeActuatorId}) {
-    return !_actuators.any((a) => a.id != excludeActuatorId && pinsOf(a).contains(pin));
-  }
-
   void dispose() {
     _actuatorsController.close();
   }

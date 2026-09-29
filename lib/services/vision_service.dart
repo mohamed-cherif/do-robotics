@@ -46,8 +46,6 @@ class VisionService {
   CameraController? _camera;
   CameraController? get cameraController => _camera;
   bool _isInitialized = false;
-  bool get isInitialized => _isInitialized;
-  bool get isStreaming => _camera?.value.isStreamingImages ?? false;
 
   /// How the phone is attached to the robot (from [VisionPreferences]).
   PhoneMount mount = PhoneMount.auto;

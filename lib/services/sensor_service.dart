@@ -223,9 +223,4 @@ class SensorService {
 
   /// Low-pass filtered accelerometer (gravity reaction, device frame, m/s²).
   List<double> get gravity => [_gravX, _gravY, _gravZ];
-
-  // For telemetry
-  List<double> get currentValues => [_lastX, _lastY, _lastZ];
-  List<double> get gyroValues => [_gyroX, _gyroY, _gyroZ];
-  List<double> get magValues => [_magX, _magY, _magZ];
 }
