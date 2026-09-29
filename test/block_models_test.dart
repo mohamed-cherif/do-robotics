@@ -63,6 +63,61 @@ void main() {
           '"nestedBlocks":{},"nextBlock":null,"position":{"dx":0,"dy":0}}]';
       expect(BlockInstance.listFromJson(json, defs), isEmpty);
     });
+
+    test('an unknown block in the middle of a chain no longer drops the rest', () {
+      final script = [
+        BlockInstance(instanceId: 'a', definition: def('logic_wait'), nextBlock:
+          BlockInstance(instanceId: 'gone', definition: def('logic_wait'), nextBlock:
+            BlockInstance(instanceId: 'c', definition: def('act_say')))),
+      ];
+      final json = BlockInstance.listToJson(script).replaceFirst(
+          '"instanceId":"gone","definitionId":"logic_wait"',
+          '"instanceId":"gone","definitionId":"act_motor_deleted"');
+      final report = BlockInstance.loadScript(json, defs);
+      expect(report.skipped, 1);
+      expect(report.unknownIds, {'act_motor_deleted'});
+      final a = report.blocks.single;
+      expect(a.instanceId, 'a');
+      expect(a.nextBlock!.instanceId, 'c');
+    });
+
+    test('damaged files are reported, never thrown', () {
+      for (final bad in ['', 'not json', '{"a":1}', '42', 'null']) {
+        expect(BlockInstance.loadScript(bad, defs).damaged, isTrue, reason: bad);
+      }
+      // Right shape, wrong types inside: tolerated.
+      final report = BlockInstance.loadScript(
+          '[7, {"definitionId": "logic_wait", "inputValues": [1], "nestedBlocks": "x",'
+          ' "position": {"dx": "far"}, "nextBlock": 5}]',
+          defs);
+      expect(report.damaged, isFalse);
+      expect(report.blocks.single.definition.id, 'logic_wait');
+      expect(report.blocks.single.inputValues['seconds'], 1); // default
+      expect(report.malformed, 2);
+    });
+
+    test('absurdly deep nesting is cut off instead of overflowing the stack', () {
+      var json = '{"definitionId":"logic_wait"}';
+      for (var i = 0; i < 5000; i++) {
+        json = '{"definitionId":"logic_repeat","nestedBlocks":{"do":$json}}';
+      }
+      final report = BlockInstance.loadScript('[$json]', defs);
+      expect(report.blocks, hasLength(1));
+      expect(report.malformed, greaterThan(0));
+    });
+
+    test('a long chain (2000 blocks) round-trips', () {
+      BlockInstance? chain;
+      for (var i = 0; i < 2000; i++) {
+        chain = BlockInstance(instanceId: 'w$i', definition: def('logic_wait'), nextBlock: chain);
+      }
+      final restored = BlockInstance.listFromJson(BlockInstance.listToJson([chain!]), defs).single;
+      var n = 0;
+      for (BlockInstance? b = restored; b != null; b = b.nextBlock) {
+        n++;
+      }
+      expect(n, 2000);
+    });
   });
 
   group('BlockFactory', () {
@@ -147,6 +202,29 @@ void main() {
       final other = BlockInstance(instanceId: 'other', definition: def('logic_if'));
       expect(loop.containsInstance(other), isFalse);
       expect(inner.containsInstance(loop), isFalse);
+    });
+  });
+
+  group('BlockInstance defaults', () {
+    test('a fresh block runs with the values the editor shows', () {
+      expect(BlockInstance(instanceId: 'n', definition: def('math_number')).inputValues['value'], 90);
+      expect(BlockInstance(instanceId: 'v', definition: def('sense_voice')).inputValues['phrase'], 'go');
+      expect(BlockInstance(instanceId: 's', definition: def('act_say')).inputValues['text'], 'Hello!');
+      // Block sockets never get a default.
+      expect(BlockInstance(instanceId: 'w', definition: def('logic_while')).inputValues.containsKey('do'), isFalse);
+    });
+
+    test('explicit and saved values win over defaults', () {
+      final b = BlockInstance(instanceId: 'n', definition: def('math_number'), inputValues: {'value': 5});
+      expect(b.inputValues['value'], 5);
+      final restored = BlockInstance.listFromJson(BlockInstance.listToJson([b]), defs).single;
+      expect(restored.inputValues['value'], 5);
+    });
+
+    test('scripts saved without a value load with the default the editor showed', () {
+      const json = '[{"instanceId":"n","definitionId":"math_number","inputValues":{},'
+          '"nestedBlocks":{},"nextBlock":null,"position":{"dx":0,"dy":0}}]';
+      expect(BlockInstance.listFromJson(json, defs).single.inputValues['value'], 90);
     });
   });
 }

@@ -112,6 +112,15 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
 
   // ── Save / Load ────────────────────────────────────────────────────────────
 
+  /// Everything a saved script may contain, including blocks that are not
+  /// in the palette right now (hidden ones, Smart Follow without 2 motors),
+  /// so loading never silently drops them.
+  List<BlockDefinition> get _loadDefinitions => [
+        ...BlockFactory.getAllStaticBlocks(),
+        BlockFactory.targetLockedBlock(),
+        ..._actuatorBlocks,
+      ];
+
   List<BlockDefinition> get _allDefinitions => [
     ..._sensorBlocks,
     ..._logicBlocks,
@@ -185,20 +194,31 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
                   },
                 ),
                 onTap: () async {
-                  final loaded = await _saveService.load(name, _allDefinitions);
+                  final report = await _saveService.load(name, _loadDefinitions);
                   if (!ctx.mounted) return;
                   Navigator.pop(ctx);
                   if (!mounted) return;
-                  if (loaded == null || loaded.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Script is empty or uses deleted actuators')),
-                    );
+                  final messenger = ScaffoldMessenger.of(context);
+                  if (report == null || report.damaged) {
+                    messenger.showSnackBar(const SnackBar(
+                        content: Text("This script is damaged and can't be opened.")));
+                    return;
+                  }
+                  if (report.blocks.isEmpty) {
+                    messenger.showSnackBar(const SnackBar(
+                        content: Text('Nothing to load: the script is empty or only uses devices '
+                            'that were removed in Configure Hardware.')));
                     return;
                   }
                   setState(() {
                     _script.clear();
-                    _script.addAll(loaded);
+                    _script.addAll(report.blocks);
                   });
+                  if (report.skipped > 0) {
+                    messenger.showSnackBar(SnackBar(
+                        content: Text('Loaded. ${report.skipped} block(s) were left out because '
+                            'their device no longer exists in Configure Hardware.')));
+                  }
                 },
               );
             },

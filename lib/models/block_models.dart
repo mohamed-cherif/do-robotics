@@ -76,7 +76,16 @@ class BlockInstance {
     Map<String, BlockInstance?>? nestedBlocks,
     this.nextBlock,
     this.position = Offset.zero,
-  })  : inputValues = inputValues ?? {},
+  })  : inputValues = {
+          // Start from the definition's defaults so what the editor shows is
+          // what runs. Palette blocks used to start empty: the editor showed
+          // e.g. Number = 90 or Heard "go", while the runner and the Python
+          // converter fell back to 0 / "" — a fresh "Heard [go]" never fired.
+          for (final input in definition.inputs)
+            if (input.type != InputFieldType.blockSocket && input.defaultValue != null)
+              input.id: input.defaultValue,
+          ...?inputValues,
+        },
         nestedBlocks = nestedBlocks ?? {};
 
   BlockInstance copyWith({
@@ -129,54 +138,130 @@ class BlockInstance {
     };
   }
 
-  /// Reconstruct a [BlockInstance] from JSON. Returns null if the block's
-  /// definition ID is not found in [allDefinitions] (e.g. deleted actuator).
+  /// Reconstruct a [BlockInstance] (and the chain after it) from JSON.
+  /// Blocks whose definition no longer exists (e.g. a deleted actuator) are
+  /// skipped; the blocks chained after them are kept.
   static BlockInstance? fromJson(
     Map<String, dynamic> json,
     List<BlockDefinition> allDefinitions,
-  ) {
-    final defId = json['definitionId'] as String? ?? '';
-    final def = allDefinitions.cast<BlockDefinition?>().firstWhere(
-      (d) => d?.id == defId,
-      orElse: () => null,
-    );
-    if (def == null) return null;
-
-    final rawNested = json['nestedBlocks'] as Map<String, dynamic>? ?? {};
-    final nested = rawNested.map((k, v) => MapEntry(
-      k,
-      v != null ? BlockInstance.fromJson(v as Map<String, dynamic>, allDefinitions) : null,
-    ));
-
-    final rawNext = json['nextBlock'] as Map<String, dynamic>?;
-    final pos = json['position'] as Map<String, dynamic>? ?? {};
-
-    return BlockInstance(
-      instanceId: json['instanceId'] as String? ?? '',
-      definition: def,
-      inputValues: Map<String, dynamic>.from(json['inputValues'] as Map? ?? {}),
-      nestedBlocks: nested,
-      nextBlock: rawNext != null ? BlockInstance.fromJson(rawNext, allDefinitions) : null,
-      position: Offset(
-        (pos['dx'] as num?)?.toDouble() ?? 0,
-        (pos['dy'] as num?)?.toDouble() ?? 0,
-      ),
-    );
-  }
+  ) =>
+      _chainFromJson(json, {for (final d in allDefinitions) d.id: d}, ScriptLoadReport._(), 0);
 
   static List<BlockInstance> listFromJson(
     String jsonString,
     List<BlockDefinition> allDefinitions,
-  ) {
-    final list = jsonDecode(jsonString) as List;
-    return list
-        .map((j) => BlockInstance.fromJson(j as Map<String, dynamic>, allDefinitions))
-        .whereType<BlockInstance>()
-        .toList();
+  ) =>
+      loadScript(jsonString, allDefinitions).blocks;
+
+  /// Parses a saved script without ever throwing: malformed JSON, wrong
+  /// types, unknown blocks and absurd nesting are reported in the result.
+  static ScriptLoadReport loadScript(String jsonString, List<BlockDefinition> allDefinitions) {
+    final report = ScriptLoadReport._();
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(jsonString);
+    } catch (_) {
+      report.damaged = true;
+      return report;
+    }
+    if (decoded is! List) {
+      report.damaged = true;
+      return report;
+    }
+    final defs = {for (final d in allDefinitions) d.id: d};
+    for (final entry in decoded) {
+      if (entry is Map) {
+        final b = _chainFromJson(entry, defs, report, 0);
+        if (b != null) report.blocks.add(b);
+      } else {
+        report.malformed++;
+      }
+    }
+    return report;
+  }
+
+  /// Deepest nesting accepted when loading (a real program is < 20 deep).
+  static const int maxLoadDepth = 100;
+
+  static BlockInstance? _chainFromJson(
+      Map node, Map<String, BlockDefinition> defs, ScriptLoadReport report, int depth) {
+    if (depth > maxLoadDepth) {
+      report.malformed++;
+      return null;
+    }
+    BlockInstance? head, tail;
+    Object? current = node;
+    // Iterative over nextBlock so long chains don't recurse.
+    while (current is Map) {
+      final block = _singleFromJson(current, defs, report, depth);
+      if (block != null) {
+        if (tail == null) {
+          head = block;
+        } else {
+          tail.nextBlock = block;
+        }
+        tail = block;
+      }
+      current = current['nextBlock'];
+    }
+    if (current != null) report.malformed++;
+    return head;
+  }
+
+  static BlockInstance? _singleFromJson(
+      Map json, Map<String, BlockDefinition> defs, ScriptLoadReport report, int depth) {
+    final defId = json['definitionId'];
+    final def = defId is String ? defs[defId] : null;
+    if (def == null) {
+      report.skipped++;
+      if (defId is String) report.unknownIds.add(defId);
+      return null;
+    }
+
+    final nested = <String, BlockInstance?>{};
+    final rawNested = json['nestedBlocks'];
+    if (rawNested is Map) {
+      rawNested.forEach((k, v) {
+        if (k is! String) return;
+        nested[k] = v is Map ? _chainFromJson(v, defs, report, depth + 1) : null;
+      });
+    }
+
+    final rawInputs = json['inputValues'];
+    final pos = json['position'];
+    double coord(String k) {
+      final v = pos is Map ? pos[k] : null;
+      return v is num && v.isFinite ? v.toDouble() : 0;
+    }
+
+    return BlockInstance(
+      instanceId: json['instanceId'] is String ? json['instanceId'] as String : '',
+      definition: def,
+      inputValues: rawInputs is Map
+          ? {for (final e in rawInputs.entries) if (e.key is String) e.key as String: e.value}
+          : null,
+      nestedBlocks: nested,
+      position: Offset(coord('dx'), coord('dy')),
+    );
   }
 
   static String listToJson(List<BlockInstance> blocks) =>
       jsonEncode(blocks.map((b) => b.toJson()).toList());
+}
+
+/// What happened when a saved script was loaded.
+class ScriptLoadReport {
+  ScriptLoadReport._();
+
+  /// Root blocks that could be restored.
+  final List<BlockInstance> blocks = [];
+  /// Blocks dropped because their definition no longer exists.
+  int skipped = 0;
+  final Set<String> unknownIds = {};
+  /// Entries with the wrong shape (ignored).
+  int malformed = 0;
+  /// The file is not a block script at all (bad JSON / wrong top level).
+  bool damaged = false;
 }
 
 // Pre-defined block colors

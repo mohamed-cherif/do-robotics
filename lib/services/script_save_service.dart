@@ -30,15 +30,16 @@ class ScriptSaveService {
     );
   }
 
-  /// Returns null if the slot doesn't exist or all blocks are from deleted actuators.
-  Future<List<BlockInstance>?> load(
+  /// Loads a slot. Returns null if it doesn't exist; never throws on a
+  /// damaged or partly incompatible script (see [ScriptLoadReport]).
+  Future<ScriptLoadReport?> load(
     String slotName,
     List<BlockDefinition> allDefinitions,
   ) async {
     final prefs = await SharedPreferences.getInstance();
     final json = prefs.getString('$_scriptsKey/$slotName');
     if (json == null) return null;
-    return BlockInstance.listFromJson(json, allDefinitions);
+    return BlockInstance.loadScript(json, allDefinitions);
   }
 
   Future<void> delete(String slotName) async {
