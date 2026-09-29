@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../services/connectivity/connectivity_manager.dart';
 import '../services/connectivity/robot_connection.dart';
@@ -137,13 +138,15 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               _switchAndConnect(ConnectionType.bluetooth);
             },
           ),
-          SimpleDialogOption(
-            child: const Row(children: [Icon(Icons.usb), SizedBox(width: 8), Text("USB Serial (OTG)")]),
-            onPressed: () {
-              Navigator.pop(context);
-              _switchAndConnect(ConnectionType.serial);
-            },
-          ),
+          // USB serial to a microcontroller is only possible on Android.
+          if (Platform.isAndroid)
+            SimpleDialogOption(
+              child: const Row(children: [Icon(Icons.usb), SizedBox(width: 8), Text("USB Serial (OTG)")]),
+              onPressed: () {
+                Navigator.pop(context);
+                _switchAndConnect(ConnectionType.serial);
+              },
+            ),
           SimpleDialogOption(
             child: const Row(children: [Icon(Icons.wifi), SizedBox(width: 8), Text("WiFi")]),
             onPressed: () {

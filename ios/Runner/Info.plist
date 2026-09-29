@@ -61,5 +61,9 @@
 	<string>Location is used for compass heading to enable direction-based robot control.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Local network access is used to connect to your robot over WiFi.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dorobot._tcp</string>
+	</array>
 </dict>
 </plist>
