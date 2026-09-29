@@ -229,12 +229,23 @@ class ObjectDetectorService {
           final threads = (cores >= 4 ? 4 : (cores > 1 ? cores - 1 : 1))
               .clamp(1, message.maxThreads);
           options.threads = threads;
+          var accel = 'CPU';
           if (Platform.isAndroid) {
             options.addDelegate(
                 XNNPackDelegate(options: XNNPackDelegateOptions(numThreads: threads)));
+            accel = 'XNNPack';
           }
 
-          interpreter = Interpreter.fromBuffer(message.modelBytes, options: options);
+          try {
+            interpreter = Interpreter.fromBuffer(message.modelBytes, options: options);
+          } catch (e) {
+            // Delegate unavailable on this device: fall back to the plain
+            // CPU kernels rather than failing to detect anything.
+            mainSendPort.send('XNNPack unavailable ($e); using plain CPU');
+            accel = 'CPU (fallback)';
+            interpreter = Interpreter.fromBuffer(message.modelBytes,
+                options: InterpreterOptions()..threads = threads);
+          }
 
           final inputTensor = interpreter.getInputTensor(0);
           final inputShape = inputTensor.shape;
@@ -268,7 +279,7 @@ class ObjectDetectorService {
           labels = message.labels.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
           mainSendPort.send(_ModelStatus(null,
               'Model loaded. Input: $inputShape ($inputType), detections: $numDetections, '
-              'threads: $threads, outputs: boxes=$boxesIdx classes=$classesIdx scores=$scoresIdx count=$countIdx'));
+              'threads: $threads ($accel), outputs: boxes=$boxesIdx classes=$classesIdx scores=$scoresIdx count=$countIdx'));
         } catch (e) {
           interpreter?.close();
           interpreter = null;
