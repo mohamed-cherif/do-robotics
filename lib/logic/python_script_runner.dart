@@ -99,7 +99,10 @@ class PythonScriptRunner {
       _logger.log("💥 Runtime error: $e");
       _logger.log(st.toString().split('\n').first);
     } finally {
-      if (_state == ExecutionState.running) _finish();
+      // Only finish *this* run. After a forced stop the user may already have
+      // started a new run; finishing that one would mark it idle while its
+      // interpreter keeps driving the motors.
+      if (identical(_cancel, cancel) && _state == ExecutionState.running) _finish();
     }
   }
 
@@ -116,11 +119,12 @@ class PythonScriptRunner {
   void stop() {
     if (_state != ExecutionState.running) return;
     _logger.log("⏹️ Program stopped");
-    _cancel?.cancel();
+    final token = _cancel;
+    token?.cancel();
     // run()'s finally calls _finish once the interpreter unwinds. If a native
     // call ignores cancellation, force the stop after a grace period.
     Future.delayed(const Duration(milliseconds: 500), () {
-      if (_state == ExecutionState.running) _finish();
+      if (identical(_cancel, token) && _state == ExecutionState.running) _finish();
     });
   }
 

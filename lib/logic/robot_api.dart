@@ -60,6 +60,7 @@ class LiveRobotApi implements RobotApi {
   final ConnectivityManager _connectivity = ConnectivityManager();
   bool _visionStarted = false;
   bool _micStarted = false;
+  bool _micRequested = false;
 
   @override
   List<ActuatorConfig> get actuators => _actuatorService.actuators;
@@ -72,16 +73,22 @@ class LiveRobotApi implements RobotApi {
   Future<void> ensureVision({bool lineMode = false}) async {
     if (lineMode) _vision.lineMode = true;
     if (_visionStarted) return;
+    // Held from here on: shutdown() releases it even if the start fails or
+    // STOP arrives while the camera is still opening.
     _visionStarted = true;
     _sensors.startListening();
-    await _vision.initialize();
     await _vision.startStream();
+    await _vision.nextFrame();
   }
 
   @override
   Future<void> ensureMic() async {
-    if (_micStarted) return;
-    _micStarted = await _voice.startListening();
+    // Ask once per run. Program loops read robot.mic every few ms; retrying
+    // after a denial re-requested the permission on every read.
+    if (_micRequested) return;
+    _micRequested = true;
+    _micStarted = true; // shutdown() releases it even if STOP comes mid-start
+    await _voice.startListening();
   }
 
   @override
@@ -155,6 +162,7 @@ class LiveRobotApi implements RobotApi {
       _micStarted = false;
       await _voice.stopListening();
     }
+    _micRequested = false;
     if (_visionStarted) {
       _visionStarted = false;
       _vision.unlock();

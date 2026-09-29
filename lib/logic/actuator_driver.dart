@@ -9,7 +9,17 @@ import '../utils/execution_logger.dart';
 class ActuatorDriver {
   static final ActuatorDriver _instance = ActuatorDriver._internal();
   factory ActuatorDriver() => _instance;
-  ActuatorDriver._internal();
+  ActuatorDriver._internal() {
+    // The cache below mirrors what the board is doing. Any link change or a
+    // firmware watchdog stop invalidates it; without this, after a Bluetooth
+    // drop + auto-reconnect every repeated `forward(200)` was skipped as
+    // "unchanged" and the robot sat still while the program ran.
+    // The driver is an app-lifetime singleton, so these never need cancelling.
+    _connectivity.stateStream.listen((_) => reset());
+    _connectivity.messages.listen((f) {
+      if (f.command == 'WATCHDOG') reset();
+    });
+  }
 
   final ConnectivityManager _connectivity = ConnectivityManager();
   final ExecutionLogger _logger = ExecutionLogger();
@@ -66,10 +76,16 @@ class ActuatorDriver {
     }
     final maxSpeed = a.maxSpeed.clamp(0, 255);
     final s = dir == 'STOP' ? 0 : speed.clamp(0, maxSpeed);
-    _logger.log("⚙️ ${a.name}: $dir @ $s");
 
     final in1 = a.parameters['in1'] as int?;
     final in2 = a.parameters['in2'] as int?;
+
+    // Log only real changes: programs re-issue the same command every loop
+    // iteration and would otherwise flood the 100-line log.
+    final changed = _states['pwm_${a.pin}'] != s ||
+        (in1 != null && _states['pin_$in1'] != ((s > 0 && dir == 'FORWARD') ? 1 : 0)) ||
+        (in2 != null && _states['pin_$in2'] != ((s > 0 && dir == 'BACKWARD') ? 1 : 0));
+    if (changed) _logger.log("⚙️ ${a.name}: $dir @ $s");
 
     if (in1 == null && in2 == null) {
       // PWM-only motor: no direction pins, reverse impossible.

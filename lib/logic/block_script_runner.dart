@@ -7,8 +7,19 @@ import '../services/voice_service.dart';
 import '../services/actuator_service.dart';
 import '../utils/execution_logger.dart';
 import 'actuator_driver.dart';
+import 'python_script_runner.dart';
 
 enum ExecutionState { idle, running, paused }
+
+/// Identity of one program run. [BlockScriptRunner.stop] cancels it; code from
+/// a previous run that is still unwinding checks its own token, never the
+/// shared state, so it can neither keep executing inside the next run nor tear
+/// that run down.
+class _Run {
+  bool _active = true;
+  bool get active => _active;
+  void cancel() => _active = false;
+}
 
 /// Pure helpers used by the runners, exposed for unit tests.
 class ScriptUtils {
@@ -101,10 +112,11 @@ class BlockScriptRunner {
   final ActuatorDriver _driver = ActuatorDriver();
   final ExecutionLogger _logger = ExecutionLogger();
 
-  StreamSubscription? _voiceLogSub;
   bool _visionStarted = false;
   bool _voiceStarted = false;
   Future<void>? _teardown;
+  _Run? _run;
+  bool _starting = false;
 
   void loadScript(List<BlockInstance> script) {
     _script = List.from(script);
@@ -112,12 +124,24 @@ class BlockScriptRunner {
 
   Future<void> play() async {
     if (_script.isEmpty) return;
-    if (_state == ExecutionState.running) return;
+    if (_state == ExecutionState.running || _starting) return;
+    if (PythonScriptRunner().state == ExecutionState.running) {
+      _logger.log("⚠️ A Python program is already running — stop it first");
+      return;
+    }
 
     // Wait for a previous run's teardown (camera release) to finish so we
-    // never re-open the camera while it is still being disposed.
-    await _teardown;
+    // never re-open the camera while it is still being disposed. _starting
+    // makes a double-tap during this wait a no-op instead of a second run.
+    _starting = true;
+    try {
+      await _teardown;
+    } finally {
+      _starting = false;
+    }
 
+    final run = _Run();
+    _run = run;
     _logger.clear();
     _logger.log("🟢 Program started");
     _state = ExecutionState.running;
@@ -125,13 +149,14 @@ class BlockScriptRunner {
     _currentBlockIndex = -1;
     _driver.reset();
 
-    await _startSensorListening();
-    await _executeScript();
+    await _startSensorListening(run);
+    await _executeScript(run);
   }
 
   /// Stops the running program. Safe to call more than once.
   void stop() {
     if (_state == ExecutionState.idle) return;
+    _run?.cancel();
     _logger.log("⏹️ Program stopped");
     _state = ExecutionState.idle;
     _stateController.add(_state);
@@ -148,22 +173,28 @@ class BlockScriptRunner {
     await _driver.stopAll(_actuatorService.actuators);
   }
 
-  Future<void> _startSensorListening() async {
+  Future<void> _startSensorListening(_Run run) async {
     // Phone IMU (tilt / shake / gyro / compass). Idempotent.
     _sensorService.startListening();
 
     if (ScriptUtils.usesVoice(_script)) {
-      _voiceLogSub ??= _voice.logStream.listen(_logger.log);
-      _voiceStarted = await _voice.startListening();
+      // Mark as held *before* awaiting, so a STOP during the permission
+      // dialog or engine start-up still releases the mic.
+      _voiceStarted = true;
+      await _voice.startListening();
     }
 
-    if (ScriptUtils.usesVision(_script)) {
+    if (run.active && ScriptUtils.usesVision(_script)) {
+      _visionStarted = true; // balanced by stopStream() even if start fails
       try {
-        _visionService.lineMode = ScriptUtils.usesLineFollowing(_script);
-        await _visionService.initialize();
+        final lineMode = ScriptUtils.usesLineFollowing(_script);
+        _visionService.lineMode = lineMode;
+        // Wait (briefly) for the first processed frame so a program that
+        // starts with `While <sensor>` doesn't see "nothing detected" just
+        // because the camera hasn't delivered a frame yet.
         await _visionService.startStream();
-        _visionStarted = true;
-        _logger.log(_visionService.lineMode
+        await _visionService.nextFrame();
+        _logger.log(lineMode
             ? "🛤️ Vision: line-following mode (Sobel)"
             : "👁️ Vision: ${_visionService.loadedModelName}");
       } catch (e) {
@@ -189,15 +220,15 @@ class BlockScriptRunner {
     // The dashboard keeps the IMU alive; nothing to stop here.
   }
 
-  Future<void> _executeScript() async {
+  Future<void> _executeScript(_Run run) async {
     try {
       for (int i = 0; i < _script.length; i++) {
-        if (_state != ExecutionState.running) break;
+        if (!run.active) break;
 
         _currentBlockIndex = i;
         _executingBlockController.add(i);
 
-        await _executeBlock(_script[i]);
+        await _executeChain(_script[i], run);
         await Future.delayed(const Duration(milliseconds: 30));
       }
     } catch (e, st) {
@@ -205,13 +236,21 @@ class BlockScriptRunner {
       _logger.log(st.toString().split('\n').first);
     }
 
-    if (_state == ExecutionState.running) {
+    if (run.active) {
       _logger.log("🏁 Program finished");
       stop();
     }
   }
 
-  Future<void> _executeBlock(BlockInstance block) async {
+  /// Executes [first] and every block chained after it via `nextBlock`.
+  Future<void> _executeChain(BlockInstance? first, _Run run) async {
+    for (var block = first; block != null && run.active; block = block.nextBlock) {
+      await _executeBlock(block, run);
+    }
+  }
+
+  /// Executes a single block (its nested slots included, not its `nextBlock`).
+  Future<void> _executeBlock(BlockInstance block, _Run run) async {
     final blockId = block.definition.id;
 
     if (blockId.startsWith('sense_') || blockId.startsWith('bool_') || blockId.startsWith('math_')) {
@@ -223,8 +262,7 @@ class BlockScriptRunner {
       case 'logic_if':
         final condition = block.nestedBlocks['condition'];
         if (condition != null && _evaluateBoolean(condition)) {
-          final thenBlock = block.nestedBlocks['then'];
-          if (thenBlock != null) await _executeBlock(thenBlock);
+          await _executeChain(block.nestedBlocks['then'], run);
         }
         break;
 
@@ -233,15 +271,15 @@ class BlockScriptRunner {
         final branch = (condition != null && _evaluateBoolean(condition))
             ? block.nestedBlocks['then']
             : block.nestedBlocks['else'];
-        if (branch != null) await _executeBlock(branch);
+        await _executeChain(branch, run);
         break;
 
       case 'logic_while':
         final condition = block.nestedBlocks['condition'];
         final doBlock = block.nestedBlocks['do'];
-        while (_state == ExecutionState.running && condition != null && _evaluateBoolean(condition)) {
-          if (doBlock != null) await _executeBlock(doBlock);
-          if (_state != ExecutionState.running) break;
+        while (run.active && condition != null && _evaluateBoolean(condition)) {
+          await _executeChain(doBlock, run);
+          if (!run.active) break;
           // Yield so sensors/vision streams get CPU time between iterations.
           await Future.delayed(const Duration(milliseconds: 20));
         }
@@ -251,8 +289,11 @@ class BlockScriptRunner {
         final times = ScriptUtils.toInt(block.inputValues['times'], 3).clamp(0, 10000);
         final doBlock = block.nestedBlocks['do'];
         for (int i = 0; i < times; i++) {
-          if (_state != ExecutionState.running) break;
-          if (doBlock != null) await _executeBlock(doBlock);
+          if (!run.active) break;
+          await _executeChain(doBlock, run);
+          // Yield to the event loop so STOP and the UI stay responsive even
+          // for a Repeat whose body never waits (e.g. only Print blocks).
+          await Future.delayed(Duration.zero);
         }
         break;
 
@@ -261,7 +302,7 @@ class BlockScriptRunner {
         final millis = (seconds * 1000).round();
         // Sleep in slices so STOP is honoured promptly during long waits.
         final deadline = DateTime.now().add(Duration(milliseconds: millis));
-        while (_state == ExecutionState.running) {
+        while (run.active) {
           final remaining = deadline.difference(DateTime.now()).inMilliseconds;
           if (remaining <= 0) break;
           await Future.delayed(Duration(milliseconds: remaining < 100 ? remaining : 100));
@@ -275,13 +316,8 @@ class BlockScriptRunner {
 
       default:
         if (blockId.startsWith('act_')) {
-          await _executeActuatorBlock(block);
+          await _executeActuatorBlock(block, run);
         }
-    }
-
-    if (_state != ExecutionState.running) return;
-    if (block.nextBlock != null) {
-      await _executeBlock(block.nextBlock!);
     }
   }
 
@@ -392,7 +428,7 @@ class BlockScriptRunner {
     }
   }
 
-  Future<void> _executeActuatorBlock(BlockInstance block) async {
+  Future<void> _executeActuatorBlock(BlockInstance block, _Run run) async {
     final blockId = block.definition.id;
 
     if (blockId == 'act_print') {
@@ -413,7 +449,7 @@ class BlockScriptRunner {
     // Smart Follow — native controller; handled before generic actuator
     // parsing because it does not map to a single ActuatorConfig entry.
     if (blockId == 'act_smart_follow') {
-      await _executeSmartFollow(block);
+      await _executeSmartFollow(block, run);
       return;
     }
 
@@ -479,7 +515,7 @@ class BlockScriptRunner {
   //
   // Uses the first two motors registered in ActuatorService as left + right.
   // Half H-bridge compatible (FORWARD-only — drops in2 if unconfigured).
-  Future<void> _executeSmartFollow(BlockInstance block) async {
+  Future<void> _executeSmartFollow(BlockInstance block, _Run run) async {
     final mode = (block.inputValues['mode'] ?? 'FETCH').toString().toUpperCase();
     final baseSpeed = ScriptUtils.toInt(block.inputValues['baseSpeed'], 100).clamp(0, 255);
     final arrivedPct = ScriptUtils.toDouble(block.inputValues['arrivedPct'], 30.0);
@@ -517,7 +553,7 @@ class BlockScriptRunner {
     _logger.log("🎯 Smart Follow [$mode]: base=$baseSpeed arrived=$arrivedPct%");
 
     try {
-      while (_state == ExecutionState.running) {
+      while (run.active) {
         final detected = _visionService.isObjectDetected;
         if (detected && !_visionService.isLocked) {
           _visionService.autoLockOnBestDetection();
