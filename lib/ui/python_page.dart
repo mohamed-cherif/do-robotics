@@ -129,6 +129,10 @@ class _Example {
   const _Example(this.title, this.description, this.icon, this.source);
 }
 
+/// Source of every built-in example, for tests (they must parse).
+@visibleForTesting
+List<String> pythonExampleSources() => _buildExamples().map((e) => e.source).toList();
+
 String _pyStr(String s) => '"${s.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"';
 
 List<_Example> _buildExamples() {
