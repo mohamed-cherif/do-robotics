@@ -1,0 +1,47 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! If the robot moved unexpectedly or kept moving after STOP, say so in the title — we prioritise safety bugs.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the block program or Python code if relevant (⋮ → Convert to Python makes a block program easy to paste).
+      placeholder: |
+        1. Configure a motor on pin 5 ...
+        2. Load snippet "Person Follower"
+        3. Press RUN ...
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: Phone model and Android/iOS version
+      placeholder: Samsung Galaxy A14, Android 14
+    validations:
+      required: true
+  - type: input
+    id: board
+    attributes:
+      label: Board, firmware sketch and connection
+      placeholder: ESP32 DevKit, receiver.ino, Bluetooth
+  - type: input
+    id: version
+    attributes:
+      label: App version / commit
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Blocks tab → ⋮ → View Logs (or the Python console). Please remove WiFi names or anything personal.
+      render: text

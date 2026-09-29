@@ -35,7 +35,7 @@
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <application
-        android:label="do_robotics"
+        android:label="DO Robotics"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

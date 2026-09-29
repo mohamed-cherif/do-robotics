@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest a new block, tutorial, sensor or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to build or teach, and what's in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: For a new block, suggest its label and what it should do. For hardware, say which board and parts.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've tried

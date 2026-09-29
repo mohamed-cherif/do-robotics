@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local debugging output (never commit device logs: they can contain
+# device identifiers and personal data)
+logcat*.txt
+err.txt
+analyze_output.txt
+
+# Unpacked copies of downloaded models
+/assets/ml/extracted/
