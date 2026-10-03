@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:do_robotics/services/mount_detector.dart';
@@ -47,6 +48,58 @@ void main() {
       expect(d.upsideDown, isTrue);
       d.update(0, 0.3, 9.8, at(2000));
       d.update(0, 0.3, 9.8, at(5000));
+      expect(d.upsideDown, isTrue);
+    });
+
+    // Gravity reaction for a portrait phone leaning back by [deg] from
+    // vertical, upright (+1) or upside down (-1).
+    List<double> leaning(double deg, double up) => [
+          0,
+          up * 9.8 * math.cos(deg * math.pi / 180),
+          9.8 * math.sin(deg * math.pi / 180),
+        ];
+
+    test('upside down and leaning back on the robot is still upside down', () {
+      // Regression: 60° back left only half of gravity on the long axis, and
+      // the old rule (needs 60 %) kept "upright": steering came out mirrored.
+      for (final deg in [30.0, 60.0, 68.0]) {
+        final d = MountDetector();
+        final g = leaning(deg, -1);
+        d.update(g[0], g[1], g[2], at(0));
+        d.update(g[0], g[1], g[2], at(900));
+        expect(d.upsideDown, isTrue, reason: 'leaning $deg°');
+      }
+    });
+
+    test('upright and leaning back stays upright', () {
+      final d = MountDetector();
+      d.update(0, -9.8, 0, at(0));
+      d.update(0, -9.8, 0, at(900));
+      expect(d.upsideDown, isTrue);
+      final g = leaning(60, 1);
+      d.update(g[0], g[1], g[2], at(1000));
+      d.update(g[0], g[1], g[2], at(1900));
+      expect(d.upsideDown, isFalse);
+    });
+
+    test('upside down and rolled 30° to one side is still upside down', () {
+      final d = MountDetector();
+      d.update(4.9, -8.49, 0, at(0));
+      d.update(4.9, -8.49, 0, at(900));
+      expect(d.upsideDown, isTrue);
+    });
+
+    test('on its side (landscape) or nearly flat keeps the last decision', () {
+      final d = MountDetector();
+      d.update(0, -9.8, 0, at(0));
+      d.update(0, -9.8, 0, at(900));
+      expect(d.upsideDown, isTrue);
+      d.update(9.8, 0.5, 0, at(1000)); // landscape
+      d.update(9.8, 0.5, 0, at(3000));
+      expect(d.upsideDown, isTrue);
+      final g = leaning(75, 1); // 15° from lying flat: too close to call
+      d.update(g[0], g[1], g[2], at(4000));
+      d.update(g[0], g[1], g[2], at(6000));
       expect(d.upsideDown, isTrue);
     });
   });

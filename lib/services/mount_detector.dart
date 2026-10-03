@@ -20,8 +20,10 @@ enum PhoneMount {
 /// with hysteresis so a bump or a moment of tilting doesn't flip it.
 ///
 /// The accelerometer reads +g along the axis pointing up (the reaction to
-/// gravity): +Y when the phone stands upright, −Y when it is upside down,
-/// ≈0 on Y when it lies flat (then the last decision is kept).
+/// gravity): +Y when the phone stands upright, −Y when it is upside down.
+/// Only the part of gravity in the screen's plane matters, so a phone
+/// leaning back against a support (up to ~70° from vertical) is still
+/// recognised. Lying nearly flat or on its side keeps the last decision.
 class MountDetector {
   MountDetector({this.holdTime = const Duration(milliseconds: 800)});
 
@@ -39,11 +41,15 @@ class MountDetector {
     final g = math.sqrt(gx * gx + gy * gy + gz * gz);
     bool? reading;
     if (g > 3) {
-      // Clearly vertical-ish only (within ~53° of upright / upside down).
-      if (gy < -0.6 * g) {
-        reading = true;
-      } else if (gy > 0.6 * g) {
-        reading = false;
+      // Gravity in the screen's plane: big enough when the phone is more
+      // than ~20° from lying flat (sin 20° ≈ 0.34). Then it is upright or
+      // upside down if that pull is closer to the long axis than to the
+      // short one (within 45° of portrait). An earlier rule needed the
+      // phone within ~53° of vertical, so a phone leaning on the robot was
+      // taken as upright and steering came out mirrored.
+      final inPlane = math.sqrt(gx * gx + gy * gy);
+      if (inPlane > 0.34 * g && gy.abs() > gx.abs()) {
+        reading = gy < 0;
       }
     }
     if (reading == null || reading == _upsideDown) {

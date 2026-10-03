@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../utils/execution_logger.dart';
 import '../utils/shared_lease.dart';
 import 'mount_detector.dart';
 import 'object_detector_service.dart';
@@ -378,7 +379,14 @@ class VisionService {
     if (!_isInitialized) return;
     if (mount == PhoneMount.auto) {
       final g = SensorService().gravity;
-      _mountDetector.update(g[0], g[1], g[2], DateTime.now());
+      final was = _mountDetector.upsideDown;
+      if (_mountDetector.update(g[0], g[1], g[2], DateTime.now()) != was) {
+        final line = _mountDetector.upsideDown
+            ? 'Camera: phone is upside down — picture and steering turned to match'
+            : 'Camera: phone is upright';
+        debugPrint(line);
+        ExecutionLogger().log(line);
+      }
     }
     final sensorOrientation = _camera?.description.sensorOrientation ?? 90;
     final rotation = frameRotation(sensorOrientation, upsideDown);
