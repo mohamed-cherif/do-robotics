@@ -231,32 +231,40 @@ class ObjectDetectorService {
     // the first frames (see resolveClassScoreRoles).
     int boxesIdx = 0, classesIdx = 1, scoresIdx = 2, countIdx = 3;
     bool rolesConfirmed = false;
+    // Timing summary in the log every [timedBatch] frames.
+    const timedBatch = 50;
+    int timedFrames = 0, modelUs = 0, frameUs = 0;
 
     await for (final message in port) {
       if (message is _InitCommand) {
         try {
-          final options = InterpreterOptions();
           final cores = Platform.numberOfProcessors;
           final threads = (cores >= 4 ? 4 : (cores > 1 ? cores - 1 : 1))
               .clamp(1, message.maxThreads);
-          options.threads = threads;
+          // XNNPack is created WITHOUT options: tflite_flutter 0.12.1 declares
+          // XNNPack's options struct with fewer fields than the LiteRT 1.4
+          // library it ships reads, so passing XNNPackDelegateOptions made the
+          // library read past it (a weight-cache path) and crash the app with
+          // SIGSEGV in TfLiteXNNPackDelegateCreateWithThreadpool on most
+          // camera starts. With null, LiteRT fills in its own defaults
+          // (int8 kernels on). Without XNNPack this int8 model falls back to
+          // slow kernels (seconds per frame on an x86 emulator).
           var accel = 'CPU';
+          Interpreter? created;
           if (Platform.isAndroid) {
-            options.addDelegate(
-                XNNPackDelegate(options: XNNPackDelegateOptions(numThreads: threads)));
-            accel = 'XNNPack';
+            try {
+              created = Interpreter.fromBuffer(message.modelBytes,
+                  options: InterpreterOptions()
+                    ..threads = threads
+                    ..addDelegate(XNNPackDelegate()));
+              accel = 'XNNPack';
+            } catch (e) {
+              mainSendPort.send('XNNPack unavailable ($e); using plain CPU');
+            }
           }
-
-          try {
-            interpreter = Interpreter.fromBuffer(message.modelBytes, options: options);
-          } catch (e) {
-            // Delegate unavailable on this device: fall back to the plain
-            // CPU kernels rather than failing to detect anything.
-            mainSendPort.send('XNNPack unavailable ($e); using plain CPU');
-            accel = 'CPU (fallback)';
-            interpreter = Interpreter.fromBuffer(message.modelBytes,
-                options: InterpreterOptions()..threads = threads);
-          }
+          interpreter = created ??
+              Interpreter.fromBuffer(message.modelBytes,
+                  options: InterpreterOptions()..threads = threads);
 
           final inputTensor = interpreter.getInputTensor(0);
           final inputShape = inputTensor.shape;
@@ -315,8 +323,9 @@ class ObjectDetectorService {
         }
 
         try {
+          final frameWatch = Stopwatch()..start();
           // ── Fast path: single-pass fused convert + resize + rotate ──────────
-          dynamic input = _directToTensor(message, inputW, inputH, inputType);
+          Uint8List? input = _directToTensor(message, inputW, inputH, inputType);
 
           if (input == null) {
             // Slow fallback via img package (unusual pixel formats).
@@ -343,6 +352,7 @@ class ObjectDetectorService {
           };
 
           interpreter.runForMultipleInputs([input], outputs);
+          modelUs += interpreter.lastNativeInferenceDurationMicroSeconds;
 
           var scores = scoresOut[0];
           var classes = classesOut[0];
@@ -405,6 +415,15 @@ class ObjectDetectorService {
           }
 
           mainSendPort.send(results);
+          frameUs += frameWatch.elapsedMicroseconds;
+          if (++timedFrames == timedBatch) {
+            mainSendPort.send('Timing (last $timedBatch frames): model '
+                '${(modelUs / timedBatch / 1000).toStringAsFixed(1)} ms, whole frame '
+                '${(frameUs / timedBatch / 1000).toStringAsFixed(1)} ms');
+            timedFrames = 0;
+            modelUs = 0;
+            frameUs = 0;
+          }
         } catch (e, stack) {
           mainSendPort.send('Inference Error: $e\n$stack');
           mainSendPort.send(<DetectionResult>[]);
@@ -447,7 +466,12 @@ class ObjectDetectorService {
   ///
   /// Supports 3-plane YUV420 (Android) and single-plane BGRA8888 (iOS).
   /// Returns null for any other format so the caller can fall back to the slow path.
-  static dynamic _directToTensor(_FrameCmd cmd, int targetW, int targetH, TensorType tensorType) {
+  ///
+  /// Returns the tensor's raw bytes (uint8 values, or float32 bytes), not a
+  /// nested [1][h][w][3] list: tflite_flutter copies a Uint8List into the
+  /// tensor in one go but converts nested lists element by element, which
+  /// took ~0.4 s per frame for this 320×320×3 input.
+  static Uint8List? _directToTensor(_FrameCmd cmd, int targetW, int targetH, TensorType tensorType) {
     final srcW = cmd.width;
     final srcH = cmd.height;
     final rotate90CW  = cmd.rotation == 90;
@@ -525,9 +549,7 @@ class ObjectDetectorService {
           }
         }
       }
-      return u8 != null
-          ? u8.reshape([1, targetH, targetW, 3])
-          : f32!.reshape([1, targetH, targetW, 3]);
+      return u8 ?? f32!.buffer.asUint8List();
     }
 
     // ── Single-plane BGRA8888 (iOS) ──────────────────────────────────────────
@@ -556,9 +578,7 @@ class ObjectDetectorService {
           }
         }
       }
-      return u8 != null
-          ? u8.reshape([1, targetH, targetW, 3])
-          : f32!.reshape([1, targetH, targetW, 3]);
+      return u8 ?? f32!.buffer.asUint8List();
     }
 
     return null; // Unknown format — caller falls back to slow path.
@@ -720,7 +740,7 @@ class ObjectDetectorService {
     }
   }
 
-  static dynamic _imageToTensor(img.Image resized, int w, int h, TensorType tensorType) {
+  static Uint8List _imageToTensor(img.Image resized, int w, int h, TensorType tensorType) {
     if (tensorType == TensorType.uint8) {
       final buf = Uint8List(w * h * 3);
       int out = 0;
@@ -732,7 +752,7 @@ class ObjectDetectorService {
           buf[out++] = p.b.toInt();
         }
       }
-      return buf.reshape([1, h, w, 3]);
+      return buf;
     } else {
       final buf = Float32List(w * h * 3);
       int out = 0;
@@ -744,7 +764,7 @@ class ObjectDetectorService {
           buf[out++] = (p.b.toInt() - 127.5) / 127.5;
         }
       }
-      return buf.reshape([1, h, w, 3]);
+      return buf.buffer.asUint8List();
     }
   }
 }
