@@ -67,8 +67,15 @@ class ObjectDetectorService {
   bool _isReady = false;
   bool _isProcessing = false;
   bool lineMode = false;
-  /// Minimum score a detection must reach to be reported.
+  /// Minimum score for a detection to count as "seen" (drawn, detected,
+  /// lockable). Filtering happens in [VisionService].
   double confidenceThreshold = 0.35;
+
+  /// Weaker detections, down to this score, are also reported, so a target
+  /// that is already locked survives a few uncertain frames (blur, partly
+  /// out of view). VisionService uses them only for that.
+  static const double trackingFloor = 0.2;
+
   /// Frame-rate cap and thread budget (see [VisionPerformance]).
   VisionPerformance performance = VisionPerformance.fast;
 
@@ -196,7 +203,7 @@ class ObjectDetectorService {
       displayNet: displayNet,
       activeLabels: activeLabels,
       lineMode: lineMode,
-      threshold: confidenceThreshold,
+      threshold: confidenceThreshold < trackingFloor ? confidenceThreshold : trackingFloor,
     ));
   }
 

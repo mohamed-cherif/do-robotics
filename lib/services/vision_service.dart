@@ -100,9 +100,13 @@ class VisionService {
 
   // Tracking State
   DetectedObjectData? _trackedObject;
-  int _lostFrames = 0;
-  /// Frames a locked target may be missing before the lock is dropped.
-  static const int lostFrameTolerance = 4;
+  DateTime _trackedSeenAt = DateTime.fromMillisecondsSinceEpoch(0);
+  /// How long a locked target may go unseen before the lock is dropped.
+  /// A time rather than a frame count, so it doesn't depend on the frame
+  /// rate (the Performance setting); 4 frames was under 0.2 s on a fast
+  /// phone, and a person dipping below the threshold for a moment (blur,
+  /// partly out of view) lost the lock.
+  static const Duration lostAfter = Duration(seconds: 1);
   bool get isLocked => _trackedObject != null && _fresh;
   DetectedObjectData? get trackedObject => _fresh ? _trackedObject : null;
 
@@ -165,7 +169,7 @@ class VisionService {
     }
     if (bestCandidate != null) {
       _trackedObject = bestCandidate;
-      _lostFrames = 0;
+      _trackedSeenAt = clock();
       debugPrint("VisionService: Locked on ${bestCandidate.label}");
     }
   }
@@ -184,7 +188,7 @@ class VisionService {
     }
     if (bestCandidate != null) {
       _trackedObject = bestCandidate;
-      _lostFrames = 0;
+      _trackedSeenAt = clock();
       debugPrint("VisionService: Auto-locked on ${bestCandidate.label}");
     }
   }
@@ -194,13 +198,12 @@ class VisionService {
     if (_lastDetections.isEmpty) return;
     final best = _lastDetections.reduce((a, b) => a.confidence > b.confidence ? a : b);
     _trackedObject = best;
-    _lostFrames = 0;
+    _trackedSeenAt = clock();
     debugPrint("VisionService: Auto-locked on ${best.label} (best confidence)");
   }
 
   void unlock() {
     _trackedObject = null;
-    _lostFrames = 0;
   }
 
   /// Intersection-over-union of two rects (0..1). Public for tests.
@@ -218,6 +221,28 @@ class VisionService {
     final dist = (candidate.center - previous.center).distance;
     // Max distance in normalized [0,1] space is sqrt(2) ≈ 1.414.
     return iou + (1.0 - (dist / 1.414).clamp(0.0, 1.0));
+  }
+
+  /// Least overlap with the target's last box for a below-threshold
+  /// detection to continue the lock.
+  static const double weakMatchMinIoU = 0.3;
+
+  /// Keeps a lock alive through a frame where the target was only seen
+  /// below the confidence threshold: the same label, overlapping where the
+  /// target just was. Never starts or moves a lock elsewhere. Public for tests.
+  static DetectedObjectData? associateWeak(
+      DetectedObjectData tracked, List<DetectedObjectData> weak) {
+    DetectedObjectData? best;
+    double bestIoU = weakMatchMinIoU;
+    for (final c in weak) {
+      if (!c.labels.contains(tracked.label)) continue;
+      final iou = computeIoU(tracked.boundingBox, c.boundingBox);
+      if (iou >= bestIoU) {
+        bestIoU = iou;
+        best = c;
+      }
+    }
+    return best;
   }
 
   /// Given the previous tracked object and the new frame's detections, pick the
@@ -302,26 +327,34 @@ class VisionService {
   void debugOnDetections(List<DetectionResult> results) => _onDetections(results);
 
   void _onDetections(List<DetectionResult> results) {
-    _lastResultAt = clock();
-    final mapped = results
-        .map((r) => DetectedObjectData(r.boundingBox, [r.label], r.score, r.uprightBox))
-        .toList();
-    _lastDetections = mapped;
+    final now = clock();
+    _lastResultAt = now;
+    // The detector also reports weaker detections (down to
+    // ObjectDetectorService.trackingFloor); only the confident ones count as
+    // seen, are drawn and can start a lock.
+    final threshold = _detector.confidenceThreshold;
+    final confident = <DetectedObjectData>[];
+    final weak = <DetectedObjectData>[];
+    for (final r in results) {
+      final d = DetectedObjectData(r.boundingBox, [r.label], r.score, r.uprightBox);
+      (r.score >= threshold ? confident : weak).add(d);
+    }
+    _lastDetections = confident;
 
     final tracked = _trackedObject;
     if (tracked != null) {
-      final next = associate(tracked, mapped);
+      final next = associate(tracked, confident) ?? associateWeak(tracked, weak);
       if (next != null) {
         _trackedObject = next;
-        _lostFrames = 0;
-      } else if (++_lostFrames > lostFrameTolerance) {
+        _trackedSeenAt = now;
+      } else if (now.difference(_trackedSeenAt) > lostAfter) {
         // Hold the last position briefly, then clear. Never decay toward the
         // centre — that made the robot "slide" toward a phantom target.
         _trackedObject = null;
       }
     }
 
-    _resultsController.add(mapped);
+    _resultsController.add(confident);
   }
 
   /// Acquires the camera stream for one user. Every call — including one that
