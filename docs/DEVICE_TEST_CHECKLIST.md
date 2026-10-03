@@ -69,9 +69,15 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
 - [ ] Lock Object Type [person] + Target X Offset: person on the robot's
       right → positive offset (portrait mount, camera forward).
 - [ ] **Upside-down mount**, *Phone mounting: Automatic*: turn the phone
-      upside down in its holder (camera still forward). Within ~1 s boxes
-      line up with objects again and a person on the robot's right gives a
-      **positive** Target X Offset (robot coordinates, same as upright).
+      upside down in its holder (camera still forward), also leaning back
+      as it rests on the robot. Within ~1 s boxes line up with objects
+      again, the program log says "phone is upside down", and a person on
+      the robot's right gives a **positive** Target X Offset (robot
+      coordinates, same as upright).
+- [ ] Open and close the Camera page 10 times: no crash (regression: a
+      native crash in XNNPack setup on most opens).
+- [ ] Person Follower: walk across the view, briefly half out of frame —
+      the lock holds (it is kept for 1 s without a detection).
 - [ ] Same with the setting on *Upside down* (no waiting) and on *Upright*
       (an upside-down phone now sees an upside-down picture: detection
       gets worse — expected, the setting overrides the sensor).
@@ -81,7 +87,8 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
 - [ ] Line follower snippet: Line Offset X is negative when the tape is on
       the robot's left, positive on its right — upright and upside down.
 - [ ] Performance modes: Battery saver / Balanced / Fast change the HUD
-      frame rate; note inference ms for each.
+      frame rate; note the ms for each (Pixel 9 on Fast: ~42–45 ms;
+      hundreds of ms means something is wrong).
 - [ ] 10 minutes of Person Follower: note battery drop and whether the phone throttles (HUD ms rising).
 
 ## 7. Voice

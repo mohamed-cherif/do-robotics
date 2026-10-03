@@ -227,9 +227,10 @@ while True:
   designed for that. A phone lying flat also works for compass and tilt.
   The app stays in portrait.
 - **Upside down is fine** (charging port up, e.g. when a holder covers the
-  bottom). With *Phone mounting: Automatic* (the default) the app notices
-  and flips the camera image, so "target on the left" still means the
-  robot's left and steering is unchanged. Choose *Upright* or *Upside
+  bottom), also leaning back against a support. With *Phone mounting:
+  Automatic* (the default) the app notices within about a second and
+  flips the camera image, so "target on the left" still means the robot's
+  left and steering is unchanged; the program log says when it switches. Choose *Upright* or *Upside
   down* in the camera settings to fix it instead.
 - Object detection uses **EfficientDet-Lite0** (80 everyday COCO objects,
   e.g. person, cup, bottle, sports ball — no faces). Accuracy, speed and

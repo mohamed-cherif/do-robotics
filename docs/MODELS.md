@@ -16,7 +16,7 @@ follower is classical image processing.
 | Input | `[1, 320, 320, 3]` uint8 RGB, 0–255 (quantization scale 1/128, zero point 127 — the model handles normalization) |
 | Outputs | TFLite_Detection_PostProcess (NMS inside the model): boxes `[1,25,4]` (ymin, xmin, ymax, xmax, normalized), class ids `[1,25]`, scores `[1,25]`, count `[1]`. Output 1 = classes, output 2 = scores, even though they are *named* `…:2` and `…:1`. |
 | Classes | 80 COCO objects (ids 0–89 with gaps; `labelmap.txt` line = id + 1). No "face" class. |
-| Runtime | LiteRT 1.4 via `tflite_flutter` 0.12.1, XNNPack on Android (plain-CPU fallback), in a background isolate. |
+| Runtime | LiteRT 1.4 via `tflite_flutter` 0.12.1, XNNPack on Android created **without options** (plain-CPU fallback), in a background isolate. Passing `XNNPackDelegateOptions` crashes: the package's options struct is smaller than the one LiteRT 1.4 reads. The input goes in as raw bytes, not a nested list. |
 
 ### Pipeline in the app
 
@@ -32,8 +32,10 @@ follower is classical image processing.
 4. Threshold (default 0.35, user-adjustable), optional label filter. Each
    box is kept upright (robot frame, used for steering) and mapped to
    portrait display space (for the overlay).
-5. Tracking in `VisionService.associate` (IoU + distance), lock dropped
-   after 4 missed frames, results older than 1.5 s ignored.
+5. Tracking in `VisionService.associate` (IoU + distance). A lock is
+   held for 1 s without a detection; detections between 0.2 and the
+   threshold only continue an existing lock on an overlapping box of the
+   same label. Results older than 1.5 s are ignored.
 
 ### Measured accuracy
 
@@ -77,11 +79,19 @@ random input, 60 runs after 5 warm-ups:
 | 2 | 26.8 ms | 25.0 ms | 40.3 ms |
 | 4 | 18.5 ms | 21.6 ms | 26.9 ms |
 
-**Not measured: phone latency, memory and power.** Google's published
-figure for EfficientDet-Lite0 is ~37 ms on a Pixel 4 CPU with 4 threads
-(TFLite Model Maker documentation); a 4 GB mid-range phone will likely be
-1.5–3× slower. The app shows the live per-frame time in the camera HUD —
-collect numbers with the device checklist.
+### Measured latency (phones)
+
+| Phone | Model (invoke) | Whole frame (convert + model + results) | How |
+|---|---|---|---|
+| Pixel 9, Android 17 | 40–43 ms | 42–45 ms | "Timing" log line (average of 50 frames), 7 batches, Camera page, *Fast* |
+| Pixel 9, before the fix (nested-list input, XNNPack options) | — | 460–495 ms (HUD) | camera HUD |
+| x86_64 emulator, for comparison | 95 ms with XNNPack, 2004 ms without | +4 ms | "Timing" log line |
+
+The app writes `Timing (last 50 frames): model … ms, whole frame … ms` to
+the log (`adb logcat | grep Timing`). **Not measured:** a 4 GB mid-range
+phone, memory and power. Google's published figure for EfficientDet-Lite0
+is ~37 ms on a Pixel 4 CPU with 4 threads (TFLite Model Maker
+documentation); collect more numbers with the device checklist.
 
 ### Conclusions and decisions
 
