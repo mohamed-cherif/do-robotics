@@ -9,7 +9,9 @@ sharing other people's private information are not tolerated.
 
 ## Reporting
 
-Report unacceptable behaviour to **TODO-maintainer-conduct-contact**. All
+Report unacceptable behaviour privately to the maintainer with a message
+on [LinkedIn](https://www.linkedin.com/in/mohamedcherif-braham/); for
+content on GitHub you can also use GitHub's **Report content** option. All
 reports are reviewed promptly and kept confidential. Maintainers may remove
 comments, commits or contributors that violate this code, following the
 enforcement guidelines of the Contributor Covenant.

@@ -6,9 +6,13 @@ personal data, as a security issue.
 
 ## Reporting a vulnerability
 
-Please **do not open a public issue**. Instead email
-**TODO-maintainer-security-contact** (or use GitHub's "Report a
-vulnerability" button on the Security tab once it is enabled) with:
+Please **do not open a public issue**. Report it privately with the
+**Report a vulnerability** button on the repository's
+[Security tab](https://github.com/mohamed-cherif/do-robotics/security);
+only the maintainer can see the report. If the button isn't there, send
+the maintainer a message on
+[LinkedIn](https://www.linkedin.com/in/mohamedcherif-braham/) asking for a
+private channel, without the details. Please include:
 
 - what an attacker can do and what they need (same WiFi? Bluetooth range?),
 - steps to reproduce, app version and firmware version,
