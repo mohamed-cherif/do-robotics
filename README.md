@@ -1,12 +1,14 @@
 # DO Robotics — your phone is the robot's brain
 
-DO Robotics turns an Android phone into the brain of a hobby robot, for
-learning and experimenting. The phone supplies the expensive parts —
-camera + object detection, microphone + speech recognition, motion sensors,
-compass, speaker, battery and radios — and a cheap microcontroller (ESP32,
-Arduino Uno or Mega) just drives the motors, servos and LEDs. You program
-the robot on the phone with drag-and-drop **blocks** (like Scratch) or in
-**Python**.
+DO Robotics aims to make learning robotics more accessible. The
+expensive parts of a smart robot — a camera with object detection, a
+microphone with speech recognition, motion sensors, a compass, a speaker,
+a battery and radios — are already in the phone in your pocket. DO
+Robotics turns an Android phone into the robot's brain, so the robot itself
+only needs a cheap microcontroller (ESP32, Arduino Uno or Mega) to drive
+the motors, servos and LEDs. You program it on the phone with
+drag-and-drop **blocks** (like Scratch) or in **Python**, with step-by-step
+tutorials from a first blinking LED to a robot that follows people.
 
 <!-- TODO(screenshot): Home tab, Blocks editor with a Person Follower program, camera view with a locked person. -->
 
@@ -47,7 +49,7 @@ After flashing, the Uno/Mega built-in LED blinks 3 times. Using
 **2. Install the app** on the phone:
 
 ```
-git clone <this repo> && cd do-robotics
+git clone https://github.com/mohamed-cherif/do-robotics.git && cd do-robotics
 flutter pub get
 flutter run --release        # phone connected over USB
 ```
@@ -309,6 +311,16 @@ the firmware host tests, and compiles the three sketches.
 Debugging on a robot: **Blocks › ⋮ › View Logs** shows every command the
 interpreter sends; `#define DEBUG_ECHO` in the ESP32 sketch prints `EXEC:`
 lines over USB serial at 115200.
+
+## Author
+
+DO Robotics is built by **Mohamed Cherif Braham** (Duke University).
+
+If you're interested in the project, would like to use it — in a class, a
+club, a workshop or for your own robot — or want to develop it further,
+reach out on [LinkedIn](https://www.linkedin.com/in/mohamedcherif-braham/)
+or [GitHub](https://github.com/mohamed-cherif). Bug reports and ideas are
+welcome as [issues](https://github.com/mohamed-cherif/do-robotics/issues).
 
 ## License
 
