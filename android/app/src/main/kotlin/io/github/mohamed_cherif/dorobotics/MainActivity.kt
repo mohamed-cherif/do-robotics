@@ -1,4 +1,4 @@
-package com.example.do_robotics
+package io.github.mohamed_cherif.dorobotics
 
 import android.content.Context
 import android.net.wifi.WifiManager

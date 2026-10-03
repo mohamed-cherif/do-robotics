@@ -17,7 +17,7 @@ val keystoreProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.example.do_robotics"
+    namespace = "io.github.mohamed_cherif.dorobotics"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -31,9 +31,10 @@ android {
     }
 
     defaultConfig {
-        // TODO(owner): choose the final application ID before the first store
-        // release; it can never change afterwards. See docs/AUDIT_2026-09.md.
-        applicationId = "com.example.do_robotics"
+        // The app's permanent identity (Play Store listing, updates): never
+        // change it after the first release. Based on the GitHub account
+        // (no domain needed); Android IDs can't contain '-'.
+        applicationId = "io.github.mohamed_cherif.dorobotics"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
