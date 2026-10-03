@@ -1,4 +1,5 @@
 import '../models/block_models.dart';
+import 'smart_follow.dart';
 
 /// Converts a block program into runnable RoboPython (the same API the
 /// Python tab executes). One-way: the result is meant to be edited further.
@@ -191,39 +192,64 @@ class _Gen {
     return '$ind# ${block.definition.label}\n';
   }
 
+  // Same steering as the block runner (SmartFollowControl): one update per
+  // camera frame, turning harder the further off-centre the target is.
   String _smartFollow(BlockInstance block, int level) {
-    final ind = _ind(level);
-    final i1 = _ind(level + 1);
-    final i2 = _ind(level + 2);
+    String ind(int extra) => _ind(level + extra);
     final mode = (block.inputValues['mode'] ?? 'FETCH').toString().toUpperCase();
-    final speed = _numLit(block.inputValues['baseSpeed'], 100);
+    final speed = _numLit(block.inputValues['baseSpeed'], 150);
+    final low = _numLit(block.inputValues['minSpeed'], 100);
     final arrived = _numLit(block.inputValues['arrivedPct'], 30);
     final sign = (block.inputValues['steering'] ?? 'NORMAL').toString() == 'REVERSED' ? '-' : '';
+    final fetch = mode != 'FOLLOW';
     final out = StringBuffer();
-    out.writeln('$ind# Smart Follow ($mode): uses the first two motors as left / right');
-    // Like the block runner: the first two *motors*, whatever else is configured.
-    out.writeln('${ind}left, right = robot.motor(robot.motors[0]), robot.motor(robot.motors[1])');
-    out.writeln('${ind}search_dir = 1');
-    out.writeln('${ind}while True:');
-    out.writeln('${i1}if robot.vision.detected:');
-    out.writeln('${i2}if robot.vision.size > $arrived:');
-    out.writeln('${_ind(level + 3)}left.stop(); right.stop()');
-    out.writeln('${_ind(level + 3)}break');
-    out.writeln('${i2}x = ${sign}robot.vision.offset_x');
-    out.writeln('${i2}if abs(x) > 0.05: search_dir = 1 if x > 0 else -1');
-    out.writeln('${i2}if x > 0.2: left.forward($speed); right.stop()');
-    out.writeln('${i2}elif x < -0.2: left.stop(); right.forward($speed)');
-    out.writeln('${i2}else: left.forward($speed); right.forward($speed)');
-    if (mode == 'FOLLOW') {
-      out.writeln('${i1}else:');
-      out.writeln('${i2}left.stop(); right.stop()');
+    void line(int extra, String code) => out.writeln('${ind(extra)}$code');
+    line(0, '# Smart Follow ($mode): uses the first two motors as left / right');
+    line(0, 'left, right = robot.motor(robot.motors[0]), robot.motor(robot.motors[1])');
+    line(0, 'base, low = $speed, $low');
+    line(0, fetch ? 'side, near = 1, 0' : 'hold = False');
+    line(0, 'while True:');
+    line(1, 'if not robot.vision.locked and robot.vision.detected:');
+    line(2, 'robot.vision.lock(robot.vision.objects[0])');
+    line(1, 'if robot.vision.locked:');
+    line(2, 'x = ${sign}robot.vision.offset_x');
+    if (fetch) {
+      line(2, 'if abs(x) > 0.05: side = 1 if x > 0 else -1');
+      line(2, 'near = near + 1 if robot.vision.size > $arrived else 0');
+      line(2, 'if near >= 3:');
+      line(3, 'left.stop(); right.stop()');
+      line(3, 'break');
     } else {
-      out.writeln('${i1}elif search_dir > 0: left.forward($speed); right.stop()');
-      out.writeln('${i1}else: left.stop(); right.forward($speed)');
+      line(2, 'if robot.vision.size > $arrived: hold = True');
+      line(2, 'elif robot.vision.size < $arrived * 0.8: hold = False');
+      line(2, 'if hold:');
+      line(3, 'left.stop(); right.stop()');
+      line(3, 'robot.wait(0.04)');
+      line(3, 'continue');
     }
-    out.writeln('${i1}robot.wait(0.06)');
-    out.writeln('${i1}left.stop(); right.stop()');
-    out.writeln('${i1}robot.wait(0.08)');
+    line(2, 'fwd = base * max(0, 1 - abs(x) / ${SmartFollowControl.spinOffset})');
+    line(2, 'turn = base * max(-1, min(1, ${SmartFollowControl.turnGain} * x))');
+    line(2, 'speeds = []');
+    line(2, 'for v in [fwd + turn, fwd - turn]:');
+    line(3, '# gear motors need a minimum power to turn at all');
+    line(3, 'if abs(v) < low / 2: v = 0');
+    line(3, 'elif abs(v) < low: v = low if v > 0 else -low');
+    line(3, 'speeds.append(int(round(max(-255, min(255, v)))))');
+    line(2, 'left.speed(speeds[0]); right.speed(speeds[1])');
+    line(2, 'robot.wait(0.04)');
+    if (fetch) {
+      line(1, 'else:');
+      line(2, '# turn toward where it was last seen, in bursts');
+      line(2, 'spin = max(low, int(base * 0.8))');
+      line(2, 'left.speed(spin * side); right.speed(-spin * side)');
+      line(2, 'robot.wait(0.2)');
+      line(2, 'left.stop(); right.stop()');
+      line(2, 'robot.wait(0.15)');
+    } else {
+      line(1, 'else:');
+      line(2, 'left.stop(); right.stop()');
+      line(2, 'robot.wait(0.04)');
+    }
     return out.toString();
   }
 

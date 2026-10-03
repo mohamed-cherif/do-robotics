@@ -69,7 +69,10 @@ class ActuatorDriver {
   // ── Motors ────────────────────────────────────────────────────────────────
 
   /// [direction] is FORWARD, BACKWARD or STOP; [speed] 0..255.
-  Future<void> driveMotor(ActuatorConfig a, String direction, int speed) async {
+  ///
+  /// [log]: false for controllers that change speeds every frame (Smart
+  /// Follow) and write their own summary, so the 100-line log isn't flooded.
+  Future<void> driveMotor(ActuatorConfig a, String direction, int speed, {bool log = true}) async {
     var dir = direction.toUpperCase();
     if (a.invertedDirection && dir != 'STOP') {
       dir = dir == 'FORWARD' ? 'BACKWARD' : 'FORWARD';
@@ -85,7 +88,7 @@ class ActuatorDriver {
     final changed = _states['pwm_${a.pin}'] != s ||
         (in1 != null && _states['pin_$in1'] != ((s > 0 && dir == 'FORWARD') ? 1 : 0)) ||
         (in2 != null && _states['pin_$in2'] != ((s > 0 && dir == 'BACKWARD') ? 1 : 0));
-    if (changed) _logger.log("⚙️ ${a.name}: $dir @ $s");
+    if (changed && log) _logger.log("⚙️ ${a.name}: $dir @ $s");
 
     if (in1 == null && in2 == null) {
       // PWM-only motor: no direction pins, reverse impossible.

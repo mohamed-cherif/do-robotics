@@ -104,9 +104,11 @@ class FakeRobotApi implements RobotApi {
   Future<void> shutdown() async => calls.add('shutdown');
 }
 
-Future<(List<String>, FakeRobotApi)> runRobot(String src) async {
+Future<(List<String>, FakeRobotApi)> runRobot(String src,
+    {void Function(FakeRobotApi api)? configure}) async {
   final out = <String>[];
   final api = FakeRobotApi();
+  configure?.call(api);
   final interp = Interpreter(onPrint: out.add);
   interp.globals.vars['robot'] = buildRobotModule(api, interp, log: out.add);
   await interp.run(src);

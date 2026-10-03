@@ -709,20 +709,19 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
       {
         'emoji': '🎾',
         'name': 'Fetch Bot',
-        'description': 'Native PD controller: searches for object, drives toward it with momentum-aware steering, stops when close. Uses Smart Follow block.',
+        'description': 'Searches for the object, drives to it steering smoothly, stops when close. One Smart Follow block: raise "min speed" if a wheel hums but does not turn.',
         'requiredMotors': 2,
         'build': () {
-          // Smart Follow is a single self-contained block that runs a tight
-          // 30ms control loop inside the runner. It handles search, tracking,
-          // PD steering, and stop-on-arrival — so the snippet is just one block.
+          // Smart Follow is a single self-contained block: search, tracking,
+          // steering and stop-on-arrival, so the snippet is just one block.
           final smartFollowDef = findDef('act_smart_follow');
           final smartFollow = BlockInstance(
             instanceId: _uuid.v4(),
             definition: smartFollowDef,
             inputValues: {
               'mode': 'FETCH',
-              'baseSpeed': 100,
-              'minSpeed': 60,
+              'baseSpeed': 150,
+              'minSpeed': 100,
               'arrivedPct': 30,
               'steering': 'NORMAL',
             },

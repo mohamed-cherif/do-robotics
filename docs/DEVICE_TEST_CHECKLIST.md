@@ -78,6 +78,11 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
       native crash in XNNPack setup on most opens).
 - [ ] Person Follower: walk across the view, briefly half out of frame —
       the lock holds (it is kept for 1 s without a detection).
+- [ ] ⚡ Snippets › Fetch Bot with a bottle 1 m away, straight ahead, then
+      30° to the left and right: the robot drives smoothly toward it,
+      turns toward an off-centre bottle without stalling, and stops close
+      to it. If a wheel hums without turning, raise "min speed"; if it
+      turns away from the bottle, set the block's steering to REVERSED.
 - [ ] Same with the setting on *Upside down* (no waiting) and on *Upright*
       (an upside-down phone now sees an upside-down picture: detection
       gets worse — expected, the setting overrides the sensor).

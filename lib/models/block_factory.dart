@@ -772,9 +772,9 @@ class BlockFactory {
     return _servoTrackXBlock(actuator);
   }
 
-  // Smart Follow — native PD controller. Auto-uses first two configured motors.
-  // Runs a tight 30ms loop inside the runner (bypasses block interpretation) so
-  // object tracking responds in ~30ms instead of 150-250ms.
+  // Smart Follow — steers the first two configured motors toward the locked
+  // target, one speed update per camera frame (see SmartFollowControl). Runs
+  // inside the runner (no block interpretation) so it reacts within a frame.
   static BlockDefinition smartFollowBlock() {
     return BlockDefinition(
       id: 'act_smart_follow',
@@ -795,7 +795,7 @@ class BlockFactory {
           id: 'baseSpeed',
           label: 'base speed',
           type: InputFieldType.number,
-          defaultValue: 100,
+          defaultValue: 150,
           min: 60,
           max: 255,
         ),
@@ -803,7 +803,7 @@ class BlockFactory {
           id: 'minSpeed',
           label: 'min speed',
           type: InputFieldType.number,
-          defaultValue: 60,
+          defaultValue: 100,
           min: 0,
           max: 255,
         ),

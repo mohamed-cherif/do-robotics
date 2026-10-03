@@ -9,6 +9,7 @@ import '../services/actuator_service.dart';
 import '../utils/execution_logger.dart';
 import 'actuator_driver.dart';
 import 'python_script_runner.dart';
+import 'smart_follow.dart';
 
 enum ExecutionState { idle, running, paused }
 
@@ -531,26 +532,25 @@ class BlockScriptRunner {
     }
   }
 
-  // ── Smart Follow: native pulsed bang-bang follower ─────────────────────────
+  // ── Smart Follow: continuous proportional steering ─────────────────────────
   //
-  // Tight control loop for object tracking. Bypasses block interpretation
-  // (no IF chains, no per-block yields) so reaction time is ~1 frame.
+  // One wheel-speed update per camera frame (SmartFollowControl): straight
+  // ahead while the target is near the centre, turning harder the further
+  // off-centre it is, on the spot when far off. It used to drive in 60 ms
+  // pulses with 80 ms pauses and steer by stopping one wheel — too weak for
+  // ordinary gear motors: the robot crept forward and froze when the target
+  // was off to one side.
   //
   // Uses the first two motors registered in ActuatorService as left + right.
-  // Half H-bridge compatible (FORWARD-only — drops in2 if unconfigured).
+  // A motor without IN2 can't reverse; that wheel stops instead (pivot).
   Future<void> _executeSmartFollow(BlockInstance block, _Run run) async {
     final mode = (block.inputValues['mode'] ?? 'FETCH').toString().toUpperCase();
-    final baseSpeed = ScriptUtils.toInt(block.inputValues['baseSpeed'], 100).clamp(0, 255);
+    final baseSpeed = ScriptUtils.toInt(block.inputValues['baseSpeed'], 150).clamp(0, 255);
+    final minSpeed = ScriptUtils.toInt(block.inputValues['minSpeed'], 100).clamp(0, 255);
     final arrivedPct = ScriptUtils.toDouble(block.inputValues['arrivedPct'], 30.0);
     // Flip sign of offset so all downstream logic (search spin, correction)
     // reverses consistently. Covers swapped motor wiring, inverted mount, etc.
     final steerSign = (block.inputValues['steering'] ?? 'NORMAL').toString() == 'REVERSED' ? -1.0 : 1.0;
-
-    // Pulsed drive: drive for pulseMs, coast for pauseMs so momentum dies and
-    // the camera gets a stable frame. Overridable through inputValues.
-    final int pulseMs = ScriptUtils.toInt(block.inputValues['pulseMs'], 60).clamp(10, 1000);
-    final int pauseMs = ScriptUtils.toInt(block.inputValues['pauseMs'], 80).clamp(0, 1000);
-    final double deadzone = ScriptUtils.toDouble(block.inputValues['deadzone'], 0.20).clamp(0.0, 1.0);
 
     final motors = _actuatorService.actuators.where((a) => a.type == ActuatorType.motor).toList();
     if (motors.length < 2) {
@@ -564,66 +564,80 @@ class BlockScriptRunner {
       return;
     }
 
-    double lastOffsetSign = 1; // default search direction: right
+    const frameWait = Duration(milliseconds: 200);
+    double lastSide = 1; // search toward the right first
+    int nearFrames = 0; // FETCH: frames in a row the target looked close
+    bool holding = false; // FOLLOW: close enough, waiting for it to move away
+    var lastStatus = DateTime.fromMillisecondsSinceEpoch(0);
 
+    String dir(int v) => v > 0 ? 'FORWARD' : (v < 0 ? 'BACKWARD' : 'STOP');
     Future<void> drive(int left, int right) async {
-      await _driver.driveMotor(leftM, left > 0 ? 'FORWARD' : 'STOP', left);
-      await _driver.driveMotor(rightM, right > 0 ? 'FORWARD' : 'STOP', right);
+      // Speeds change every frame: no per-change log lines (see the status
+      // line below instead).
+      await _driver.driveMotor(leftM, dir(left), left.abs(), log: false);
+      await _driver.driveMotor(rightM, dir(right), right.abs(), log: false);
     }
 
     Future<void> stopMotors() => drive(0, 0);
 
-    _logger.log("🎯 Smart Follow [$mode]: base=$baseSpeed arrived=$arrivedPct%");
+    _logger.log("🎯 Smart Follow [$mode]: speed $baseSpeed (min $minSpeed), arrived at $arrivedPct%");
 
     try {
       while (run.active) {
-        final detected = _visionService.isObjectDetected;
-        if (detected && !_visionService.isLocked) {
+        // The lock is kept through short gaps in detection, so steer by the
+        // lock, not by whether something was detected in this very frame.
+        if (!_visionService.isLocked && _visionService.isObjectDetected) {
           _visionService.autoLockOnBestDetection();
         }
 
-        if (!detected) {
+        if (!_visionService.isLocked) {
+          nearFrames = 0;
           if (mode == 'FOLLOW') {
             // Stay still and wait for the target to reappear.
             await stopMotors();
-            await Future.delayed(Duration(milliseconds: pulseMs + pauseMs));
+            await _visionService.nextFrame(timeout: frameWait);
             continue;
           }
-          // FETCH: pivot toward the direction we last saw the target.
-          if (lastOffsetSign >= 0) {
-            await drive(baseSpeed, 0);
-          } else {
-            await drive(0, baseSpeed);
-          }
-          await Future.delayed(Duration(milliseconds: pulseMs));
+          // FETCH: turn toward where the target was last seen, in bursts so
+          // the camera gets sharp pictures in between.
+          final spin = math.max(minSpeed, (baseSpeed * 0.8).round());
+          await drive(lastSide > 0 ? spin : -spin, lastSide > 0 ? -spin : spin);
+          await Future.delayed(const Duration(milliseconds: 200));
           await stopMotors();
-          await Future.delayed(Duration(milliseconds: pauseMs));
+          await Future.delayed(const Duration(milliseconds: 150));
           continue;
         }
 
         final area = _visionService.targetArea; // 0..100
-        if (area > arrivedPct) {
-          await stopMotors();
-          _logger.log("🎯 Arrived (size=${area.toStringAsFixed(1)}%)");
-          break;
+        final x = (_visionService.targetOffsetX * steerSign).clamp(-1.0, 1.0);
+        if (x.abs() > 0.05) lastSide = x.sign;
+
+        if (mode == 'FETCH') {
+          // Several frames in a row, so one oversized box can't end the run.
+          nearFrames = area > arrivedPct ? nearFrames + 1 : 0;
+          if (nearFrames >= 3) {
+            await stopMotors();
+            _logger.log("🎯 Arrived (size=${area.toStringAsFixed(1)}%)");
+            break;
+          }
+        } else if (area > arrivedPct) {
+          holding = true;
+        } else if (area < arrivedPct * 0.8) {
+          holding = false;
         }
 
-        final rawOffset = _visionService.targetOffsetX * steerSign; // -1..+1
-        if (rawOffset.abs() > 0.05) {
-          lastOffsetSign = rawOffset.sign;
-        }
+        final (left, right) =
+            holding ? (0, 0) : SmartFollowControl.wheelSpeeds(x, baseSpeed, minSpeed);
+        await drive(left, right);
 
-        if (rawOffset > deadzone) {
-          await drive(baseSpeed, 0); // target right → steer right
-        } else if (rawOffset < -deadzone) {
-          await drive(0, baseSpeed); // target left → steer left
-        } else {
-          await drive(baseSpeed, baseSpeed);
+        final now = DateTime.now();
+        if (now.difference(lastStatus) >= const Duration(seconds: 1)) {
+          lastStatus = now;
+          final side = x >= 0 ? '+' : '';
+          _logger.log("🎯 ${_visionService.targetLabel} x=$side${x.toStringAsFixed(2)} "
+              "size=${area.toStringAsFixed(0)}% → L $left R $right");
         }
-
-        await Future.delayed(Duration(milliseconds: pulseMs));
-        await stopMotors();
-        await Future.delayed(Duration(milliseconds: pauseMs));
+        await _visionService.nextFrame(timeout: frameWait);
       }
     } finally {
       await stopMotors();
