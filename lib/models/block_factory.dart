@@ -772,9 +772,9 @@ class BlockFactory {
     return _servoTrackXBlock(actuator);
   }
 
-  // Smart Follow — steers the first two configured motors toward the locked
-  // target, one speed update per camera frame (see SmartFollowControl). Runs
-  // inside the runner (no block interpretation) so it reacts within a frame.
+  // Smart Follow — chases the locked target with the first two configured
+  // motors in small steps (see SmartFollowControl); stands still while there
+  // is no target. Runs inside the runner (no block interpretation).
   static BlockDefinition smartFollowBlock() {
     return BlockDefinition(
       id: 'act_smart_follow',

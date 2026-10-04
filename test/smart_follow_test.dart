@@ -70,6 +70,8 @@ void main() {
           expect(c, contains('robot.vision.lock(robot.vision.objects[0])'),
               reason: 'locks a target, otherwise offset_x stays 0');
           expect(c, contains('${SmartFollowControl.turnGain} * x'));
+          expect(c, contains('robot.wait(step)'), reason: 'drives in small steps');
+          expect(c, isNot(contains('spin')), reason: 'no searching spin');
         }
       }
       expect(code({'steering': 'REVERSED'}), contains('x = -robot.vision.offset_x'));

@@ -1,15 +1,20 @@
 /// Steering for the Smart Follow block, shared by the block runner and the
 /// Python that "Convert to Python" generates for it.
 ///
-/// One update per camera frame: the robot drives forward while the target
-/// is near the centre of the picture and turns harder the further off-centre
-/// it is — on the spot beyond [spinOffset].
+/// The robot chases in small steps: forward while the target is near the
+/// centre of the picture, turning harder the further off-centre it is — on
+/// the spot beyond [spinOffset].
 class SmartFollowControl {
   /// Turn strength per unit of offset: full turn from |x| = 1 / turnGain.
   static const double turnGain = 1.6;
 
   /// Forward speed fades to 0 as the target's offset nears this value.
   static const double spinOffset = 0.6;
+
+  /// One chase step: drive [stepMs], then stand still [pauseMs] so the robot
+  /// settles and the next decision uses a sharp, current picture.
+  static const int stepMs = 70;
+  static const int pauseMs = 70;
 
   /// Left / right wheel speeds (-255..255, negative = backward) to steer
   /// toward a target at horizontal offset [x] (-1 left .. +1 right).

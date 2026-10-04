@@ -192,8 +192,9 @@ class _Gen {
     return '$ind# ${block.definition.label}\n';
   }
 
-  // Same steering as the block runner (SmartFollowControl): one update per
-  // camera frame, turning harder the further off-centre the target is.
+  // Same behaviour as the block runner (SmartFollowControl): chase the target
+  // in small steps, turning harder the further off-centre it is; stand still
+  // while there is no target.
   String _smartFollow(BlockInstance block, int level) {
     String ind(int extra) => _ind(level + extra);
     final mode = (block.inputValues['mode'] ?? 'FETCH').toString().toUpperCase();
@@ -202,54 +203,49 @@ class _Gen {
     final arrived = _numLit(block.inputValues['arrivedPct'], 30);
     final sign = (block.inputValues['steering'] ?? 'NORMAL').toString() == 'REVERSED' ? '-' : '';
     final fetch = mode != 'FOLLOW';
+    String secs(int ms) => (ms / 1000).toString();
     final out = StringBuffer();
     void line(int extra, String code) => out.writeln('${ind(extra)}$code');
     line(0, '# Smart Follow ($mode): uses the first two motors as left / right');
     line(0, 'left, right = robot.motor(robot.motors[0]), robot.motor(robot.motors[1])');
-    line(0, 'base, low = $speed, $low');
-    line(0, fetch ? 'side, near = 1, 0' : 'hold = False');
+    line(0, 'base, low = $speed, $low      # cruising speed, lowest speed that turns a wheel');
+    line(0, 'step, pause = ${secs(SmartFollowControl.stepMs)}, ${secs(SmartFollowControl.pauseMs)}'
+        '  # seconds: drive one small step, then stand still');
+    line(0, fetch ? 'near = 0' : 'hold = False');
     line(0, 'while True:');
     line(1, 'if not robot.vision.locked and robot.vision.detected:');
     line(2, 'robot.vision.lock(robot.vision.objects[0])');
-    line(1, 'if robot.vision.locked:');
-    line(2, 'x = ${sign}robot.vision.offset_x');
+    line(1, 'if not robot.vision.locked:');
+    line(2, '# no target: stand still and keep watching');
+    line(2, 'left.stop(); right.stop()');
+    line(2, 'robot.wait(0.05)');
+    line(2, 'continue');
+    line(1, 'x = ${sign}robot.vision.offset_x   # -1 (left) .. 1 (right)');
     if (fetch) {
-      line(2, 'if abs(x) > 0.05: side = 1 if x > 0 else -1');
-      line(2, 'near = near + 1 if robot.vision.size > $arrived else 0');
-      line(2, 'if near >= 3:');
-      line(3, 'left.stop(); right.stop()');
-      line(3, 'break');
-    } else {
-      line(2, 'if robot.vision.size > $arrived: hold = True');
-      line(2, 'elif robot.vision.size < $arrived * 0.8: hold = False');
-      line(2, 'if hold:');
-      line(3, 'left.stop(); right.stop()');
-      line(3, 'robot.wait(0.04)');
-      line(3, 'continue');
-    }
-    line(2, 'fwd = base * max(0, 1 - abs(x) / ${SmartFollowControl.spinOffset})');
-    line(2, 'turn = base * max(-1, min(1, ${SmartFollowControl.turnGain} * x))');
-    line(2, 'speeds = []');
-    line(2, 'for v in [fwd + turn, fwd - turn]:');
-    line(3, '# gear motors need a minimum power to turn at all');
-    line(3, 'if abs(v) < low / 2: v = 0');
-    line(3, 'elif abs(v) < low: v = low if v > 0 else -low');
-    line(3, 'speeds.append(int(round(max(-255, min(255, v)))))');
-    line(2, 'left.speed(speeds[0]); right.speed(speeds[1])');
-    line(2, 'robot.wait(0.04)');
-    if (fetch) {
-      line(1, 'else:');
-      line(2, '# turn toward where it was last seen, in bursts');
-      line(2, 'spin = max(low, int(base * 0.8))');
-      line(2, 'left.speed(spin * side); right.speed(-spin * side)');
-      line(2, 'robot.wait(0.2)');
+      line(1, 'near = near + 1 if robot.vision.size > $arrived else 0');
+      line(1, 'if near >= 3:');
       line(2, 'left.stop(); right.stop()');
-      line(2, 'robot.wait(0.15)');
+      line(2, 'break');
     } else {
-      line(1, 'else:');
+      line(1, 'if robot.vision.size > $arrived: hold = True');
+      line(1, 'elif robot.vision.size < $arrived * 0.8: hold = False');
+      line(1, 'if hold:');
       line(2, 'left.stop(); right.stop()');
-      line(2, 'robot.wait(0.04)');
+      line(2, 'robot.wait(0.05)');
+      line(2, 'continue');
     }
+    line(1, 'fwd = base * max(0, 1 - abs(x) / ${SmartFollowControl.spinOffset})');
+    line(1, 'turn = base * max(-1, min(1, ${SmartFollowControl.turnGain} * x))');
+    line(1, 'speeds = []');
+    line(1, 'for v in [fwd + turn, fwd - turn]:');
+    line(2, '# gear motors need a minimum power to turn at all');
+    line(2, 'if abs(v) < low / 2: v = 0');
+    line(2, 'elif abs(v) < low: v = low if v > 0 else -low');
+    line(2, 'speeds.append(int(round(max(-255, min(255, v)))))');
+    line(1, 'left.speed(speeds[0]); right.speed(speeds[1])');
+    line(1, 'robot.wait(step)');
+    line(1, 'left.stop(); right.stop()');
+    line(1, 'robot.wait(pause)');
     return out.toString();
   }
 

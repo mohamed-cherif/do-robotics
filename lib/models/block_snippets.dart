@@ -375,7 +375,7 @@ List<BlockSnippet> blockSnippets(List<BlockDefinition> defs, List<BlockDefinitio
     {
       'emoji': '🎾',
       'name': 'Fetch Bot',
-      'description': 'Searches for the object, drives to it steering smoothly, stops when close. One Smart Follow block: raise "min speed" if a wheel hums but does not turn.',
+      'description': 'Chases the object in small steps while it sees it, waits while it does not, stops when close. One Smart Follow block: raise "min speed" if a wheel hums but does not turn.',
       'requiredMotors': 2,
       'build': () {
         // Smart Follow is a single self-contained block: search, tracking,

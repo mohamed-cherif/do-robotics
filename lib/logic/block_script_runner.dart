@@ -532,14 +532,13 @@ class BlockScriptRunner {
     }
   }
 
-  // ── Smart Follow: continuous proportional steering ─────────────────────────
+  // ── Smart Follow: chase the target in small steps ──────────────────────────
   //
-  // One wheel-speed update per camera frame (SmartFollowControl): straight
-  // ahead while the target is near the centre, turning harder the further
-  // off-centre it is, on the spot when far off. It used to drive in 60 ms
-  // pulses with 80 ms pauses and steer by stopping one wheel — too weak for
-  // ordinary gear motors: the robot crept forward and froze when the target
-  // was off to one side.
+  // While a target is locked: drive one short step with the wheel speeds for
+  // where it is (SmartFollowControl: straight when centred, turning harder
+  // the further off-centre), stop, let the robot settle, and decide again on
+  // a fresh, sharp picture. Driving continuously overshot the target and
+  // turns. With no target it stands still: a searching spin overshot too.
   //
   // Uses the first two motors registered in ActuatorService as left + right.
   // A motor without IN2 can't reverse; that wheel stops instead (pivot).
@@ -548,8 +547,8 @@ class BlockScriptRunner {
     final baseSpeed = ScriptUtils.toInt(block.inputValues['baseSpeed'], 150).clamp(0, 255);
     final minSpeed = ScriptUtils.toInt(block.inputValues['minSpeed'], 100).clamp(0, 255);
     final arrivedPct = ScriptUtils.toDouble(block.inputValues['arrivedPct'], 30.0);
-    // Flip sign of offset so all downstream logic (search spin, correction)
-    // reverses consistently. Covers swapped motor wiring, inverted mount, etc.
+    // Flip sign of offset so the steering reverses consistently. Covers
+    // swapped motor wiring, inverted mount, etc.
     final steerSign = (block.inputValues['steering'] ?? 'NORMAL').toString() == 'REVERSED' ? -1.0 : 1.0;
 
     final motors = _actuatorService.actuators.where((a) => a.type == ActuatorType.motor).toList();
@@ -565,7 +564,10 @@ class BlockScriptRunner {
     }
 
     const frameWait = Duration(milliseconds: 200);
-    double lastSide = 1; // search toward the right first
+    // One step: drive this long, then stand still this long.
+    const step = Duration(milliseconds: SmartFollowControl.stepMs);
+    const pause = Duration(milliseconds: SmartFollowControl.pauseMs);
+    bool hadTarget = false;
     int nearFrames = 0; // FETCH: frames in a row the target looked close
     bool holding = false; // FOLLOW: close enough, waiting for it to move away
     var lastStatus = DateTime.fromMillisecondsSinceEpoch(0);
@@ -591,26 +593,23 @@ class BlockScriptRunner {
         }
 
         if (!_visionService.isLocked) {
-          nearFrames = 0;
-          if (mode == 'FOLLOW') {
-            // Stay still and wait for the target to reappear.
-            await stopMotors();
-            await _visionService.nextFrame(timeout: frameWait);
-            continue;
+          // No target: stand still and keep watching.
+          if (hadTarget) {
+            hadTarget = false;
+            _logger.log("🎯 Lost the target — waiting until it is seen again");
           }
-          // FETCH: turn toward where the target was last seen, in bursts so
-          // the camera gets sharp pictures in between.
-          final spin = math.max(minSpeed, (baseSpeed * 0.8).round());
-          await drive(lastSide > 0 ? spin : -spin, lastSide > 0 ? -spin : spin);
-          await Future.delayed(const Duration(milliseconds: 200));
+          nearFrames = 0;
           await stopMotors();
-          await Future.delayed(const Duration(milliseconds: 150));
+          await _visionService.nextFrame(timeout: frameWait);
           continue;
+        }
+        if (!hadTarget) {
+          hadTarget = true;
+          _logger.log("🎯 Chasing ${_visionService.targetLabel}");
         }
 
         final area = _visionService.targetArea; // 0..100
         final x = (_visionService.targetOffsetX * steerSign).clamp(-1.0, 1.0);
-        if (x.abs() > 0.05) lastSide = x.sign;
 
         if (mode == 'FETCH') {
           // Several frames in a row, so one oversized box can't end the run.
@@ -628,7 +627,6 @@ class BlockScriptRunner {
 
         final (left, right) =
             holding ? (0, 0) : SmartFollowControl.wheelSpeeds(x, baseSpeed, minSpeed);
-        await drive(left, right);
 
         final now = DateTime.now();
         if (now.difference(lastStatus) >= const Duration(seconds: 1)) {
@@ -636,6 +634,13 @@ class BlockScriptRunner {
           final side = x >= 0 ? '+' : '';
           _logger.log("🎯 ${_visionService.targetLabel} x=$side${x.toStringAsFixed(2)} "
               "size=${area.toStringAsFixed(0)}% → L $left R $right");
+        }
+
+        if (left != 0 || right != 0) {
+          await drive(left, right);
+          await Future.delayed(step);
+          await stopMotors();
+          await Future.delayed(pause);
         }
         await _visionService.nextFrame(timeout: frameWait);
       }
