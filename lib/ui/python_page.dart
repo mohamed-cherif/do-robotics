@@ -5,8 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../logic/block_script_runner.dart' show ExecutionState;
+import '../logic/code_generator.dart';
 import '../logic/python_script_runner.dart';
 import '../models/actuator_config.dart';
+import '../models/block_factory.dart';
+import '../models/block_snippets.dart';
 import '../services/actuator_service.dart';
 import '../services/python_script_store.dart';
 import '../utils/execution_logger.dart';
@@ -137,21 +140,9 @@ String _pyStr(String s) => '"${s.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
 
 List<_Example> _buildExamples() {
   final actuators = ActuatorService().actuators;
-  final motors = actuators.where((a) => a.type == ActuatorType.motor).toList();
   final leds = actuators.where((a) => a.type == ActuatorType.led).toList();
-  final leftName = motors.isNotEmpty ? motors[0].name : 'Left Wheel';
-  final rightName = motors.length > 1 ? motors[1].name : 'Right Wheel';
   final ledName = leds.isNotEmpty ? leds[0].name : 'Headlight';
-  final l = _pyStr(leftName);
-  final r = _pyStr(rightName);
   final led = _pyStr(ledName);
-
-  final motorsHeader = '''
-import robot
-
-left = robot.motor($l)
-right = robot.motor($r)
-''';
 
   return [
     _Example(
@@ -174,155 +165,62 @@ for i in range(3):
 print("Done")
 ''',
     ),
-    _Example(
-      'Motor test',
-      'Forward 2 s, backward 2 s, then stop. Good first test.',
-      Icons.settings_outlined,
-      '''
-# Motor test: drives forward for 2 seconds, backward for 2 seconds, then stops.
-# Setup: two motors named $l and $r in the Actuators tab.
-$motorsHeader
-print("Forward")
-left.forward(200)
-right.forward(200)
-robot.wait(2)
-
-print("Backward")
-left.backward(200)
-right.backward(200)
-robot.wait(2)
-
-left.stop()
-right.stop()
-print("Done")
-''',
-    ),
-    _Example(
-      'Person follower',
-      'Steers toward the nearest person and stops when close.',
-      Icons.directions_walk,
-      '''
-# Person follower: turns toward the nearest person and drives until it is close.
-# Setup: two motors; mount the phone with the camera facing forward. Press STOP to end.
-$motorsHeader
-while True:
-    if robot.vision.lock("person"):
-        if robot.vision.size > 30:
-            # Close enough: hold position
-            left.stop()
-            right.stop()
-        else:
-            x = robot.vision.offset_x   # -1 (left) .. 1 (right)
-            left.forward(int(160 + 90 * x))
-            right.forward(int(160 - 90 * x))
-    else:
-        left.stop()
-        right.stop()
-    robot.wait(0.02)
-''',
-    ),
-    _Example(
-      'Voice control',
-      'Say "forward", "left", "right" or "stop" to drive.',
-      Icons.mic_none,
-      '''
-# Voice control: say "forward", "left", "right" or "stop" to drive the robot.
-# Setup: two motors; allow microphone access when the phone asks.
-$motorsHeader
-print("Listening... say forward / left / right / stop")
-while True:
-    if robot.mic.heard("forward"):
-        left.forward(200)
-        right.forward(200)
-    elif robot.mic.heard("left"):
-        left.backward(150)
-        right.forward(150)
-    elif robot.mic.heard("right"):
-        left.forward(150)
-        right.backward(150)
-    elif robot.mic.heard("stop"):
-        left.stop()
-        right.stop()
-    robot.wait(0.05)
-''',
-    ),
-    _Example(
-      'Line follower',
-      'Follows a dark line on a light floor with bang-bang steering.',
-      Icons.timeline,
-      '''
-# Line follower: follows a dark line on a light floor (bang-bang steering).
-# Setup: two motors; point the camera down at the floor just in front of the robot.
-$motorsHeader
-while True:
-    if robot.vision.line_visible:
-        if robot.vision.line_offset > 0.15:
-            # Line is to the right: curve right
-            left.forward(180)
-            right.forward(60)
-        elif robot.vision.line_offset < -0.15:
-            # Line is to the left: curve left
-            left.forward(60)
-            right.forward(180)
-        else:
-            left.forward(150)
-            right.forward(150)
-    else:
-        left.stop()
-        right.stop()
-    robot.wait(0.02)
-''',
-    ),
-    _Example(
-      'Tilt steering',
-      'Tilt the phone to drive: pitch = speed, roll = turn.',
-      Icons.screen_rotation_outlined,
-      '''
-# Tilt steering: tilt the phone forward/back to drive, left/right to turn.
-# Setup: two motors; hold the phone flat with the screen up. Press STOP to end.
-$motorsHeader
-while True:
-    pitch = robot.imu.pitch
-    roll = robot.imu.roll
-    if pitch < -20:
-        left.forward(200)
-        right.forward(200)
-    elif pitch > 20:
-        left.backward(200)
-        right.backward(200)
-    elif roll < -20:        # tilted right (roll is negative) -> spin right
-        left.forward(180)
-        right.backward(180)
-    elif roll > 20:         # tilted left -> spin left
-        left.backward(180)
-        right.forward(180)
-    else:
-        left.stop()
-        right.stop()
-    robot.wait(0.05)
-''',
-    ),
-    _Example(
-      'Compass',
-      'Spins in place until the robot faces East.',
-      Icons.explore_outlined,
-      '''
-# Compass: spins in place until the phone points East, then stops.
-# Setup: two motors; keep the phone mounted flat on the robot.
-$motorsHeader
-print(f"Heading: {robot.compass.heading}")
-while not robot.compass.facing("East"):
-    left.forward(140)
-    right.backward(140)
-    robot.wait(0.05)
-
-left.stop()
-right.stop()
-robot.say("Facing East")
-''',
-    ),
+    // The rest are the block snippets, converted: the same programs as
+    // Blocks › ⚡ Snippets, ready to edit.
+    for (final snippet in _snippetsForPython(actuators))
+      _Example(
+        snippet.name,
+        snippet.description,
+        _snippetIcons[snippet.name] ?? Icons.extension_outlined,
+        _snippetSource(snippet),
+      ),
   ];
 }
+
+/// Block snippets built with the configured motors, or with placeholder
+/// "Left Wheel" / "Right Wheel" motors when fewer than two are set up (the
+/// example then shows which names to configure).
+List<BlockSnippet> _snippetsForPython(List<ActuatorConfig> actuators) {
+  var motors = actuators.where((a) => a.type == ActuatorType.motor).toList();
+  if (motors.length < 2) {
+    motors = [
+      ActuatorConfig(id: 'example_left', name: 'Left Wheel', type: ActuatorType.motor, pin: 0),
+      ActuatorConfig(id: 'example_right', name: 'Right Wheel', type: ActuatorType.motor, pin: 0),
+    ];
+  }
+  final motorDefs = [for (final m in motors) BlockFactory.actuatorBlock(m)];
+  final defs = [...BlockFactory.getAllStaticBlocks(), ...motorDefs];
+  return blockSnippets(defs, motorDefs);
+}
+
+String _snippetSource(BlockSnippet snippet) {
+  final header = StringBuffer()
+    ..writeln('# ${snippet.name}: the same program as Blocks › ⚡ Snippets › ${snippet.name}.')
+    ..writeln('# Change anything below; this copy is yours.');
+  // Wrap the description into comment lines of at most ~76 characters.
+  var line = '#';
+  for (final word in snippet.description.split(' ')) {
+    if (line.length + word.length + 1 > 76) {
+      header.writeln(line);
+      line = '#';
+    }
+    line += ' $word';
+  }
+  if (line != '#') header.writeln(line);
+  return '$header\n${CodeGenerator.generateCode(snippet.build())}';
+}
+
+const Map<String, IconData> _snippetIcons = {
+  'Motor Forward Test': Icons.settings_outlined,
+  'Pivot Left Test': Icons.turn_left,
+  'Pivot Right Test': Icons.turn_right,
+  'Person Follower': Icons.directions_walk,
+  'Voice Control': Icons.mic_none,
+  'Fetch Bot': Icons.sports_baseball_outlined,
+  'Line Follower': Icons.timeline,
+  'Tilt Steering': Icons.screen_rotation_outlined,
+  'Compass Patrol': Icons.explore_outlined,
+};
 
 const String _kApiReference = '''
 RoboPython API reference
