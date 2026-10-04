@@ -73,15 +73,18 @@ class ActuatorDriver {
   /// [log]: false for controllers that change speeds every frame (Smart
   /// Follow) and write their own summary, so the 100-line log isn't flooded.
   Future<void> driveMotor(ActuatorConfig a, String direction, int speed, {bool log = true}) async {
+    final in1 = a.parameters['in1'] as int?;
+    final in2 = a.parameters['in2'] as int?;
+
     var dir = direction.toUpperCase();
-    if (a.invertedDirection && dir != 'STOP') {
+    // Inverting only works with both direction pins: without IN2 the motor
+    // can't run backward, so an inverted FORWARD would just stop it. (The
+    // settings dialog no longer allows it; older saved settings may.)
+    if (a.invertedDirection && dir != 'STOP' && in1 != null && in2 != null) {
       dir = dir == 'FORWARD' ? 'BACKWARD' : 'FORWARD';
     }
     final maxSpeed = a.maxSpeed.clamp(0, 255);
     final s = dir == 'STOP' ? 0 : speed.clamp(0, maxSpeed);
-
-    final in1 = a.parameters['in1'] as int?;
-    final in2 = a.parameters['in2'] as int?;
 
     // Log only real changes: programs re-issue the same command every loop
     // iteration and would otherwise flood the 100-line log.

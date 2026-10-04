@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
+import '../logic/actuator_driver.dart';
 import '../models/actuator_config.dart';
 import '../services/actuator_service.dart';
+import '../services/connectivity/connectivity_manager.dart';
 
 class ActuatorSettingsPage extends StatefulWidget {
   const ActuatorSettingsPage({super.key});
@@ -233,6 +235,10 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
   int? _in1Pin;
   int? _in2Pin;
 
+  /// Motor test (Forward / Backward 1 s) in progress, and what it said.
+  bool _testing = false;
+  String? _testStatus;
+
   @override
   void initState() {
     super.initState();
@@ -273,6 +279,29 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
     if (pin >= 34 && pin <= 39) return "Input Only (ESP32)";
     return "";
   }
+
+  /// Short note for the IN1/IN2 lists: pins that can't drive a direction
+  /// input on an ESP32 (fine on an Uno/Mega, so they stay selectable).
+  static String _directionPinNote(int pin) {
+    if (pin == 0 || pin == 1 || pin == 3) return ' · not on ESP32 (serial/boot)';
+    if (pin >= 6 && pin <= 11) return ' · not on ESP32 (flash)';
+    if (pin >= 34 && pin <= 39) return ' · ESP32 input only';
+    if (pin == 20 || pin == 24 || (pin >= 28 && pin <= 31)) return ' · not on ESP32';
+    return '';
+  }
+
+  List<DropdownMenuItem<int?>> get _directionPinItems => [
+        const DropdownMenuItem<int?>(value: null, child: Text("None", style: TextStyle(fontSize: 12))),
+        for (var p = 0; p < 40; p++)
+          DropdownMenuItem<int?>(
+            value: p,
+            child: Text("Pin $p${_directionPinNote(p)}",
+                style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis),
+          ),
+      ];
+
+  /// Backward (and so Invert direction) needs both direction pins.
+  bool get _canReverse => _in1Pin != null && _in2Pin != null;
 
   @override
   Widget build(BuildContext context) {
@@ -367,9 +396,10 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
                 const Text("H-Bridge Direction Pins (Optional)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.blueGrey)),
                 const SizedBox(height: 4),
                 const Text(
-                  "IN1 = direction pin 1, IN2 = direction pin 2.\n"
-                  "Single-pin mode: set IN1 only, leave IN2 as None (wire IN2 directly to GND on the H-bridge). "
-                  "HIGH = forward, LOW = stop. No reverse available in this mode.",
+                  "Forward = IN1 HIGH + IN2 LOW. Backward = IN1 LOW + IN2 HIGH, so going "
+                  "backward (and Invert direction) needs both pins wired to the board.\n"
+                  "Single-pin mode: set IN1 only and wire IN2 to GND on the driver: "
+                  "forward and stop only. To flip such a motor, swap its two wires on the driver.",
                   style: TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const SizedBox(height: 12),
@@ -378,11 +408,9 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
                     Expanded(
                       child: DropdownButtonFormField<int?>(
                         initialValue: _in1Pin,
+                        isExpanded: true,
                         decoration: const InputDecoration(labelText: "IN1 Pin", labelStyle: TextStyle(fontSize: 12)),
-                        items: [
-                          const DropdownMenuItem<int?>(value: null, child: Text("None", style: TextStyle(fontSize: 12))),
-                          ...List.generate(40, (i) => i).map((p) => DropdownMenuItem(value: p, child: Text("Pin $p", style: TextStyle(fontSize: 12)))),
-                        ],
+                        items: _directionPinItems,
                         onChanged: (v) => setState(() => _in1Pin = v),
                       ),
                     ),
@@ -390,11 +418,11 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
                     Expanded(
                       child: DropdownButtonFormField<int?>(
                         initialValue: _in2Pin,
+                        isExpanded: true,
                         decoration: const InputDecoration(labelText: "IN2 Pin", labelStyle: TextStyle(fontSize: 12)),
-                        items: [
-                          const DropdownMenuItem<int?>(value: null, child: Text("None", style: TextStyle(fontSize: 12))),
-                          ...List.generate(40, (i) => i).map((p) => DropdownMenuItem(value: p, child: Text("Pin $p", style: TextStyle(fontSize: 12)))),
-                        ],
+                        items: _directionPinItems,
+                        // IN2 alone can never drive the motor forward.
+                        validator: (v) => v != null && _in1Pin == null ? 'Set IN1 too' : null,
                         onChanged: (v) => setState(() => _in2Pin = v),
                       ),
                     ),
@@ -426,10 +454,43 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text("Invert direction", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  subtitle: const Text("Swap FORWARD and BACKWARD for this motor", style: TextStyle(fontSize: 11, color: Colors.grey)),
-                  value: _invertDirection,
-                  onChanged: (v) => setState(() => _invertDirection = v),
+                  subtitle: Text(
+                    _canReverse
+                        ? "Swap FORWARD and BACKWARD for this motor"
+                        : "Needs IN1 and IN2: without IN2 the motor can't run backward, "
+                            "so inverting would only stop it",
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  value: _invertDirection && _canReverse,
+                  onChanged: _canReverse ? (v) => setState(() => _invertDirection = v) : null,
                 ),
+                const SizedBox(height: 4),
+                const Text("Test (lift the wheels first)",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.blueGrey)),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _testing || !_canReverse ? null : () => _testMotor('BACKWARD'),
+                        icon: const Icon(Icons.arrow_back, size: 16),
+                        label: const Text("Backward 1 s", style: TextStyle(fontSize: 12)),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _testing || _in1Pin == null ? null : () => _testMotor('FORWARD'),
+                        icon: const Icon(Icons.arrow_forward, size: 16),
+                        label: const Text("Forward 1 s", style: TextStyle(fontSize: 12)),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_testStatus != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(_testStatus!, style: const TextStyle(fontSize: 11, color: Colors.blueGrey)),
+                  ),
               ],
               if (_selectedType == ActuatorType.servo) ...[
                 const SizedBox(height: 16),
@@ -540,7 +601,43 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
 
   void _save() {
     if (!_formKey.currentState!.validate()) return;
+    widget.onSave(_currentConfig());
+    Navigator.pop(context);
+  }
 
+  /// Runs this motor for 1 s with the settings on screen (not yet saved),
+  /// so the wiring and direction can be checked before saving.
+  Future<void> _testMotor(String direction) async {
+    if (!ConnectivityManager().isConnected) {
+      setState(() => _testStatus = "Connect the robot first (tap the header on the Home tab).");
+      return;
+    }
+    final config = _currentConfig();
+    final driver = ActuatorDriver();
+    final speed = config.maxSpeed < 150 ? config.maxSpeed : 150;
+    setState(() {
+      _testing = true;
+      _testStatus = direction == 'FORWARD' ? "Forward…" : "Backward…";
+    });
+    try {
+      await driver.driveMotor(config, direction, speed);
+      await Future.delayed(const Duration(seconds: 1));
+    } finally {
+      await driver.driveMotor(config, 'STOP', 0);
+      if (mounted) {
+        setState(() {
+          _testing = false;
+          _testStatus = direction == 'FORWARD'
+              ? "Wrong way? Turn on Invert direction (or swap the IN1 and IN2 numbers). "
+                  "Didn't move? Check IN1 and the speed pin."
+              : "Didn't move? IN2 isn't reaching the driver: check that its wire goes to "
+                  "pin $_in2Pin, not to GND.";
+        });
+      }
+    }
+  }
+
+  ActuatorConfig _currentConfig() {
     final config = ActuatorConfig(
       id: widget.existing?.id ?? const Uuid().v4(),
       name: _nameController.text.trim(),
@@ -552,7 +649,7 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
           'maxSpeed': _maxSpeed,
           if (_in1Pin != null) 'in1': _in1Pin,
           if (_in2Pin != null) 'in2': _in2Pin,
-          if (_invertDirection) 'inverted': true,
+          if (_invertDirection && _canReverse) 'inverted': true,
         },
         if (_selectedType == ActuatorType.servo) ...{
           'minAngle': _minAngle,
@@ -562,8 +659,6 @@ class _ActuatorDialogState extends State<ActuatorDialog> {
         },
       },
     );
-
-    widget.onSave(config);
-    Navigator.pop(context);
+    return config;
   }
 }
