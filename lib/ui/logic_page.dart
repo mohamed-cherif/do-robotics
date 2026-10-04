@@ -211,8 +211,11 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
     _snapshot();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(message),
-      duration: const Duration(seconds: 4),
+      duration: const Duration(seconds: 3),
       action: _canUndo ? SnackBarAction(label: 'UNDO', onPressed: _undo) : null,
+      // A SnackBar with an action otherwise stays until swiped away; Undo
+      // is also in the header.
+      persist: false,
     ));
   }
 

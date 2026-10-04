@@ -59,6 +59,7 @@ class _MicrophonePageState extends State<MicrophonePage> with SingleTickerProvid
             "and check that a speech service (e.g. Google) is installed."),
         action: SnackBarAction(label: 'Settings', onPressed: openAppSettings),
         duration: const Duration(seconds: 6),
+        persist: false, // with an action it would otherwise never go away
       ));
     }
   }

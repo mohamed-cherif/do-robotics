@@ -70,4 +70,25 @@ void main() {
     await tester.pumpAndSettle();
     expect(state.sortedRoots.single.inputValues['seconds'], 5);
   });
+
+  testWidgets('the "loaded / cleared" message with UNDO goes away by itself', (tester) async {
+    // Regression: a SnackBar with an action stays until swiped away unless
+    // persist is false ("Snippet loaded" stuck on screen).
+    final state = await pumpEditor(tester);
+    state.addRoot(BlockInstance(instanceId: 'w1', definition: def('logic_wait')), const Offset(40, 40));
+    await tester.tapAt(const Offset(200, 600)); // records a snapshot, so UNDO is offered
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Clear All'));
+    await tester.pump(); // the message slides in
+    await tester.pump(const Duration(milliseconds: 750));
+    expect(find.text('Canvas cleared'), findsOneWidget);
+    expect(find.text('UNDO'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pumpAndSettle();
+    expect(find.text('Canvas cleared'), findsNothing);
+  });
 }
