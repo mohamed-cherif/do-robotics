@@ -37,6 +37,9 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   RobotConnectionState _lastConnectionState = RobotConnectionState.disconnected;
   /// While the robot list is open, a stopped connect attempt isn't a failure.
   bool _robotListOpen = false;
+  /// Set before the user drops the link on purpose (Disconnect, switching
+  /// transport or robot), so that isn't reported as a lost connection.
+  bool _expectDisconnect = false;
 
   @override
   void initState() {
@@ -77,6 +80,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   /// existing link of the same type first — needed when the WiFi address
   /// changed, otherwise the app silently stayed on the old host.
   Future<void> _switchAndConnect(ConnectionType type, {bool reconnect = false}) async {
+    _expectDisconnect = true;
     if (reconnect &&
         _connectivity.activeType == type &&
         _connectivity.state != RobotConnectionState.disconnected) {
@@ -86,12 +90,37 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     await _connectivity.connect();
   }
 
-  /// Tells the user when a connection attempt ends without a link instead of
-  /// failing silently (robot off, Bluetooth off, permission denied...).
+  /// Tells the user when the robot link drops, and when a connection attempt
+  /// ends without a link instead of failing silently (robot off, Bluetooth
+  /// off, permission denied...). Both messages go away by themselves.
   void _onConnectionState(RobotConnectionState s) {
-    final wasConnecting = _lastConnectionState == RobotConnectionState.connecting;
+    final previous = _lastConnectionState;
     _lastConnectionState = s;
-    if (!mounted || _robotListOpen || !wasConnecting || s != RobotConnectionState.disconnected) {
+    if (!mounted) return;
+    if (s == RobotConnectionState.connected) {
+      _expectDisconnect = false;
+      return;
+    }
+    if (previous == RobotConnectionState.connected) {
+      if (_expectDisconnect) {
+        _expectDisconnect = false;
+        return;
+      }
+      // Bluetooth tries to reconnect by itself (state "connecting").
+      final reconnecting = s == RobotConnectionState.connecting;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+          content: Text(reconnecting
+              ? 'Robot disconnected — reconnecting…'
+              : 'Robot disconnected. Tap the header to reconnect.'),
+          duration: const Duration(seconds: 3),
+        ));
+      return;
+    }
+    if (_robotListOpen ||
+        previous != RobotConnectionState.connecting ||
+        s != RobotConnectionState.disconnected) {
       return;
     }
     final hint = switch (_connectivity.activeType) {
@@ -220,6 +249,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               ]),
               onPressed: () {
                 Navigator.pop(context);
+                _expectDisconnect = true;
                 _connectivity.disconnect();
               },
             ),
