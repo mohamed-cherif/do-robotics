@@ -89,15 +89,20 @@ the camera). Break this rule and the camera or mic stays on.
 setting, skipped while the isolate is busy) → background isolate:
 single-pass YUV→RGB + rotation + nearest-neighbour resize → TFLite
 (EfficientDet-Lite0, XNNPack) → each box twice: `uprightBox` in the
-robot's frame and `boundingBox` in portrait display space → back to
+robot's frame and `boundingBox` in screen space → back to
 `VisionService`, which tracks the locked object (IoU + distance) and
 exposes `targetOffsetX/Y`, `targetArea`, `isLocked` from the upright box.
 
-The UI is locked to portrait. The phone may be mounted upright or upside
-down (`PhoneMount`: Automatic uses gravity via `MountDetector`, or fixed):
-upside down, the frame is rotated 180° more so the model always sees an
-upright picture, and only the overlay is turned back to match the screen.
-Steering values therefore never depend on the mount. Results older than
+The UI is locked to portrait, except the Camera page, which may turn
+sideways. The phone may be mounted upright, upside down or on its side
+(`PhoneMount`: Automatic uses gravity via `MountDetector`, or fixed):
+`VisionService.frameRotation` turns the frame by the camera sensor's
+mounting minus the phone's turn, so the model always sees an upright
+picture, and `displayNet` (phone turn minus screen turn) maps the boxes
+onto the preview as shown. The screen turn is the orientation the camera
+plugin draws the preview for (`CameraValue.deviceOrientation`; capture
+orientation is not locked). Steering values therefore never depend on
+the mount or the screen.Results older than
 1.5 s count as "nothing seen". In line-follow mode the isolate runs a Sobel
 detector on the luminance plane instead. Details and measurements:
 [MODELS.md](MODELS.md).

@@ -27,10 +27,11 @@ class DetectedObjectData {
 /// Camera ownership + object tracking on top of [ObjectDetectorService].
 ///
 /// Bounding boxes are normalized (0..1): `boundingBox` in screen space (the
-/// portrait preview), `uprightBox` in the upright picture the model saw.
+/// preview as shown), `uprightBox` in the upright picture the model saw.
 /// `targetOffsetX/Y` (-1..+1, 0 = centre) and `targetArea` (% of the frame,
 /// a "closeness" proxy) come from the upright box, so they are in the
-/// robot's own frame whether the phone is mounted upright or upside down.
+/// robot's own frame whether the phone is mounted upright, upside down or
+/// on its side.
 class VisionService {
   static final VisionService _instance = VisionService._internal();
   factory VisionService() => _instance;
@@ -51,12 +52,9 @@ class VisionService {
   /// How the phone is attached to the robot (from [VisionPreferences]).
   PhoneMount mount = PhoneMount.auto;
   final MountDetector _mountDetector = MountDetector();
-  /// Whether the camera picture is currently treated as upside down.
-  bool get upsideDown => switch (mount) {
-        PhoneMount.upright => false,
-        PhoneMount.upsideDown => true,
-        PhoneMount.auto => _mountDetector.upsideDown,
-      };
+  /// How the phone is turned on the robot, in degrees (see
+  /// [MountDetector.rotation]): the fixed mount, or the automatic reading.
+  int get phoneRotation => mount.fixedRotation ?? _mountDetector.rotation;
   /// When true, run Sobel line detection instead of TFLite.
   bool lineMode = false;
 
@@ -392,13 +390,11 @@ class VisionService {
     );
     try {
       await controller.initialize();
-      // The app is portrait-only; pin the preview to portrait too, so the
-      // screen boxes line up whatever the phone's physical orientation.
-      try {
-        await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
-      } catch (e) {
-        debugPrint('Camera: could not lock capture orientation: $e');
-      }
+      // The capture orientation is NOT locked: the preview then follows the
+      // screen (portrait everywhere, sideways on the camera page when the
+      // phone is turned), and _onCameraImage reads the same orientation to
+      // place the boxes. Locking it to portrait while the screen is
+      // sideways would leave the CameraX preview turned the wrong way.
       // Automatic mount detection reads gravity from the IMU.
       SensorService().startListening();
       _camera = controller;
@@ -418,33 +414,56 @@ class VisionService {
     if (!_isInitialized) return;
     if (mount == PhoneMount.auto) {
       final g = SensorService().gravity;
-      final was = _mountDetector.upsideDown;
-      if (_mountDetector.update(g[0], g[1], g[2], DateTime.now()) != was) {
-        final line = _mountDetector.upsideDown
-            ? 'Camera: phone is upside down — picture and steering turned to match'
-            : 'Camera: phone is upright';
+      final was = _mountDetector.rotation;
+      final now = _mountDetector.update(g[0], g[1], g[2], DateTime.now());
+      if (now != was) {
+        final line = now == 0
+            ? 'Camera: phone is upright'
+            : 'Camera: phone is ${MountDetector.describe(now)} — picture and steering turned to match';
         debugPrint(line);
         ExecutionLogger().log(line);
       }
     }
-    final sensorOrientation = _camera?.description.sensorOrientation ?? 90;
-    final rotation = frameRotation(sensorOrientation, upsideDown);
+    final camera = _camera;
+    final sensorOrientation = camera?.description.sensorOrientation ?? 90;
+    final phone = phoneRotation;
     _detector.lineMode = lineMode;
     _detector.processFrame(
       cameraImage,
       activeLabels: _activeFilters,
-      rotation: rotation,
-      // The preview shows the sensor picture turned by sensorOrientation.
-      displayNet: (sensorOrientation - rotation + 360) % 360,
+      rotation: frameRotation(sensorOrientation, phone),
+      displayNet: displayNet(phone, screenRotation(camera?.value)),
     );
   }
 
-  /// Clockwise rotation that turns a camera frame upright for the model.
-  /// The UI is portrait-only, so this depends only on the camera sensor's
-  /// mounting in the phone and on whether the phone is upside down on the
-  /// robot. Public for tests.
-  static int frameRotation(int sensorOrientation, bool upsideDown) =>
-      (sensorOrientation + (upsideDown ? 180 : 0)) % 360;
+  /// Clockwise rotation that turns a camera frame upright for the model:
+  /// the camera sensor's mounting in the phone minus how far the phone is
+  /// turned ([phoneRotation], counter-clockwise). Public for tests.
+  static int frameRotation(int sensorOrientation, int phoneRotation) =>
+      (sensorOrientation - phoneRotation + 360) % 360;
+
+  /// Clockwise turn from the upright picture to the preview on screen: the
+  /// preview is upright for the screen, so it differs from the upright
+  /// picture by the phone's turn minus the screen's. 0 when both match
+  /// (an upright phone in portrait, or a sideways phone with the camera
+  /// page turned sideways). Public for tests.
+  static int displayNet(int phoneRotation, int screenRotation) =>
+      (phoneRotation - screenRotation + 360) % 360;
+
+  /// How far the preview's screen orientation is turned, in the same
+  /// convention as [MountDetector.rotation] — the orientation [CameraPreview]
+  /// draws the preview for. Public for tests.
+  static int screenRotation(CameraValue? value) {
+    final o = value == null
+        ? DeviceOrientation.portraitUp
+        : (value.lockedCaptureOrientation ?? value.deviceOrientation);
+    return switch (o) {
+      DeviceOrientation.portraitUp => 0,
+      DeviceOrientation.landscapeLeft => 90,
+      DeviceOrientation.portraitDown => 180,
+      DeviceOrientation.landscapeRight => 270,
+    };
+  }
 
   /// Completes once the next camera frame has been processed (object
   /// detections, or a line result in [lineMode]), or after [timeout].

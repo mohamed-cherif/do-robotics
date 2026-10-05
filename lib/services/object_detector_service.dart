@@ -172,7 +172,8 @@ class ObjectDetectorService {
 
   /// [rotation]: clockwise turn that makes the frame upright for the model.
   /// [displayNet]: clockwise turn from that upright picture to the screen
-  /// preview (0 when the phone is upright, 180 when mounted upside down).
+  /// preview (0 when the phone and the screen are turned the same way, e.g.
+  /// upright in portrait; 180 for an upside-down phone in portrait).
   void processFrame(CameraImage cameraImage,
       {List<String> activeLabels = const [], int rotation = 90, int displayNet = 0}) {
     if (!_isReady || _isProcessing) return;

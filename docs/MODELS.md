@@ -31,7 +31,7 @@ follower is classical image processing.
    (class ids are integers) — see `resolveClassScoreRoles`.
 4. Threshold (default 0.35, user-adjustable), optional label filter. Each
    box is kept upright (robot frame, used for steering) and mapped to
-   portrait display space (for the overlay).
+   screen space (for the overlay).
 5. Tracking in `VisionService.associate` (IoU + distance). A lock is
    held for 1 s without a detection; detections between 0.2 and the
    threshold only continue an existing lock on an overlapping box of the

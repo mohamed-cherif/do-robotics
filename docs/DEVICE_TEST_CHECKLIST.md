@@ -96,7 +96,18 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
       gets worse — expected, the setting overrides the sensor).
 - [ ] Automatic: tilting the upright phone briefly (bumps, turning) does
       not flip the picture.
-- [ ] Rotate the phone to landscape: the app stays in portrait.
+- [ ] Rotate the phone to landscape (auto-rotate on): the Camera page
+      turns sideways, the picture is upright, boxes line up with objects
+      (both sideways directions), buttons are not under the camera
+      cut-out; back to portrait: the same. Every other page stays in
+      portrait, also after leaving the Camera page sideways.
+- [ ] Phone on its side on the robot (*Automatic*): within ~1 s the log
+      says "phone is on its side", and a person on the robot's right
+      gives a **positive** Target X Offset.
+- [ ] Start a vision program (e.g. Fetch Bot), then Home › Configure
+      Sensors › Camera: the program keeps running, its target is drawn
+      in green; leaving the page does not stop the program or drop the
+      lock.
 - [ ] Line follower snippet: Line Offset X is negative when the tape is on
       the robot's left, positive on its right — upright and upside down.
 - [ ] Performance modes: Battery saver / Balanced / Fast change the HUD

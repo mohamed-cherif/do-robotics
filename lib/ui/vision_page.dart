@@ -1,5 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/vision_service.dart';
 import '../services/vision_preferences.dart';
@@ -18,9 +19,18 @@ class _VisionPageState extends State<VisionPage> {
   bool _isReady = false;
   String? _error;
 
+  /// The camera page may turn sideways with the phone (when the phone's
+  /// auto-rotate is on); the rest of the app stays portrait.
+  static const _cameraOrientations = [
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ];
+
   @override
   void initState() {
     super.initState();
+    SystemChrome.setPreferredOrientations(_cameraOrientations);
     _startVision();
   }
 
@@ -43,6 +53,7 @@ class _VisionPageState extends State<VisionPage> {
 
   @override
   void dispose() {
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     // Release this page's camera use; the camera stays on if a running
     // program still needs it.
     _visionService.stopStream();
@@ -109,16 +120,30 @@ class _VisionPageState extends State<VisionPage> {
     }
 
     final controller = _visionService.cameraController!;
-    // In Portrait, the PreviewSize (Landscape) means:
-    // Display Width = Preview Height
-    // Display Height = Preview Width
-    final double previewW = controller.value.previewSize!.height;
-    final double previewH = controller.value.previewSize!.width;
-    final Size imageSize = Size(previewW, previewH);
-    
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
+      // Rebuilt when the camera reports a new screen orientation, the same
+      // value CameraPreview turns the preview by.
+      body: ValueListenableBuilder<CameraValue>(
+        valueListenable: controller,
+        builder: (context, value, _) => _buildCamera(controller, value),
+      ),
+    );
+  }
+
+  Widget _buildCamera(CameraController controller, CameraValue value) {
+    // The preview is drawn upright for the screen: the sensor picture
+    // (previewSize, landscape) turned by the sensor's mounting minus the
+    // screen's turn. A quarter turn swaps its width and height, as in
+    // portrait.
+    final turn = (controller.description.sensorOrientation -
+            VisionService.screenRotation(value) + 360) % 360;
+    final sideways = turn % 180 != 0;
+    final double previewW = sideways ? value.previewSize!.height : value.previewSize!.width;
+    final double previewH = sideways ? value.previewSize!.width : value.previewSize!.height;
+    final Size imageSize = Size(previewW, previewH);
+
+    return Stack(
         fit: StackFit.expand,
         children: [
           // 1. Camera Preview with Fit Control + Tap to Lock
@@ -187,8 +212,8 @@ class _VisionPageState extends State<VisionPage> {
                       // Tracking Debug Text
                       if (_visionService.isLocked)
                         Positioned(
-                          top: 100,
-                          left: 20,
+                          top: MediaQuery.paddingOf(context).top + 60,
+                          left: MediaQuery.paddingOf(context).left + 12,
                           child: Container(
                             padding: const EdgeInsets.all(8),
                             color: Colors.black54,
@@ -210,134 +235,140 @@ class _VisionPageState extends State<VisionPage> {
             }
           ),
           
-          // 3. UI Overlays (Back button)
-          Positioned(
-            top: 40,
-            left: 20,
-            // heroTag: null on every FAB here — several FABs with the default
-            // tag on one page trip Flutter's duplicate-Hero assertion when a
-            // route is pushed (e.g. opening Vision Settings).
-            child: FloatingActionButton.small(
-              heroTag: null,
-              tooltip: 'Back',
-              backgroundColor: Colors.black54,
-              child: const Icon(Icons.arrow_back, color: Colors.white),
-              onPressed: () {
-                 _visionService.unlock();
-                 Navigator.pop(context);
-              },
-            ),
-          ),
-          
-          // 4. Fit Toggle Button
-          Positioned(
-             bottom: 100,
-             right: 20,
-             child: FloatingActionButton(
-               heroTag: null,
-               tooltip: _fit == BoxFit.cover ? 'Show whole camera view' : 'Fill the screen',
-               backgroundColor: const Color(0xFF00FFCC),
-               child: Icon(_fit == BoxFit.cover ? Icons.fullscreen_exit : Icons.fullscreen, color: Colors.black),
-               onPressed: () {
-                 setState(() {
-                   _fit = _fit == BoxFit.cover ? BoxFit.contain : BoxFit.cover;
-                 });
-               },
-             ),
-          ),
-          
-          // 5. Model Indicator + settings shortcut
-          Positioned(
-            top: 50,
-            right: 20,
-            child: Semantics(
-              button: true,
-              label: 'Vision settings',
-              child: GestureDetector(
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const VisionSettingsPage()),
-                );
-                if (mounted) {
-                  setState(() => _activeFilters = List.from(_visionService.activeFilters));
-                }
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.7),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFF00FFCC), width: 1),
-                ),
-                child: StreamBuilder<List<DetectedObjectData>>(
-                  stream: _visionService.resultsStream,
-                  builder: (context, _) {
-                    final ms = _visionService.averageInferenceMs;
-                    return Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.psychology, color: Color(0xFF00FFCC), size: 16),
-                        const SizedBox(width: 8),
-                        Text(
-                          ms > 0 ? "${ms.round()} ms" : _visionService.loadedModelName,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.settings, color: Colors.white70, size: 16),
-                      ],
-                    );
-                  },
+          // Buttons and labels stay clear of the system bars and, with the
+          // phone sideways, of the camera cut-out.
+          SafeArea(
+            child: Stack(
+              children: [
+              // 3. UI Overlays (Back button)
+              Positioned(
+                top: 8,
+                left: 12,
+                // heroTag: null on every FAB here — several FABs with the default
+                // tag on one page trip Flutter's duplicate-Hero assertion when a
+                // route is pushed (e.g. opening Vision Settings).
+                child: FloatingActionButton.small(
+                  heroTag: null,
+                  tooltip: 'Back',
+                  backgroundColor: Colors.black54,
+                  child: const Icon(Icons.arrow_back, color: Colors.white),
+                  // No unlock here: a running program may be following the
+                  // target. The lock is cleared when the camera closes.
+                  onPressed: () => Navigator.pop(context),
                 ),
               ),
-            ),
-            ),
-          ),
+
+              // 4. Fit Toggle Button
+              Positioned(
+                 bottom: 76,
+                 right: 12,
+                 child: FloatingActionButton(
+                   heroTag: null,
+                   tooltip: _fit == BoxFit.cover ? 'Show whole camera view' : 'Fill the screen',
+                   backgroundColor: const Color(0xFF00FFCC),
+                   child: Icon(_fit == BoxFit.cover ? Icons.fullscreen_exit : Icons.fullscreen, color: Colors.black),
+                   onPressed: () {
+                     setState(() {
+                       _fit = _fit == BoxFit.cover ? BoxFit.contain : BoxFit.cover;
+                     });
+                   },
+                 ),
+              ),
           
-          // 6. Filter Selection Button
-          Positioned(
-            bottom: 30,
-            left: 20, 
-            right: 20,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                FloatingActionButton.extended(
-                  heroTag: null,
-                  backgroundColor: const Color(0xFF00FFCC),
-                  icon: const Icon(Icons.filter_list, color: Colors.black),
-                  label: Text(
-                    _activeFilters.isEmpty ? "Detecting Everything" : "Detecting ${_activeFilters.length} Items",
-                    style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+              // 5. Model Indicator + settings shortcut
+              Positioned(
+                top: 14,
+                right: 12,
+                child: Semantics(
+                  button: true,
+                  label: 'Vision settings',
+                  child: GestureDetector(
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const VisionSettingsPage()),
+                    );
+                    if (mounted) {
+                      setState(() => _activeFilters = List.from(_visionService.activeFilters));
+                    }
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFF00FFCC), width: 1),
+                    ),
+                    child: StreamBuilder<List<DetectedObjectData>>(
+                      stream: _visionService.resultsStream,
+                      builder: (context, _) {
+                        final ms = _visionService.averageInferenceMs;
+                        return Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.psychology, color: Color(0xFF00FFCC), size: 16),
+                            const SizedBox(width: 8),
+                            Text(
+                              ms > 0 ? "${ms.round()} ms" : _visionService.loadedModelName,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Icon(Icons.settings, color: Colors.white70, size: 16),
+                          ],
+                        );
+                      },
+                    ),
                   ),
-                  onPressed: _showFilterDialog,
                 ),
-                if (_activeFilters.isNotEmpty) ...[
-                   const SizedBox(width: 10),
-                   FloatingActionButton.small(
-                     heroTag: null,
-                     tooltip: 'Detect everything again',
-                     backgroundColor: Colors.redAccent,
-                     child: const Icon(Icons.clear, color: Colors.white),
-                     onPressed: () async {
-                        setState(() {
-                          _activeFilters.clear();
-                          _visionService.setActiveFilters([]);
-                        });
-                        await VisionPreferences.setEnabledLabels({});
-                     },
-                   )
-                ]
+                ),
+              ),
+          
+              // 6. Filter Selection Button
+              Positioned(
+                bottom: 12,
+                left: 20,
+                right: 20,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    FloatingActionButton.extended(
+                      heroTag: null,
+                      backgroundColor: const Color(0xFF00FFCC),
+                      icon: const Icon(Icons.filter_list, color: Colors.black),
+                      label: Text(
+                        _activeFilters.isEmpty ? "Detecting Everything" : "Detecting ${_activeFilters.length} Items",
+                        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: _showFilterDialog,
+                    ),
+                    if (_activeFilters.isNotEmpty) ...[
+                       const SizedBox(width: 10),
+                       FloatingActionButton.small(
+                         heroTag: null,
+                         tooltip: 'Detect everything again',
+                         backgroundColor: Colors.redAccent,
+                         child: const Icon(Icons.clear, color: Colors.white),
+                         onPressed: () async {
+                            setState(() {
+                              _activeFilters.clear();
+                              _visionService.setActiveFilters([]);
+                            });
+                            await VisionPreferences.setEnabledLabels({});
+                         },
+                       )
+                    ]
+                  ],
+                ),
+              )
               ],
             ),
-          )
+          ),
         ],
-      ),
-    );
+      );
   }
 
   // --- Filter Dialog Logic ---

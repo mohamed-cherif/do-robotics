@@ -225,16 +225,25 @@ while True:
 
 ## Sensors, the phone mount, and the camera
 
-- Mount the phone **in portrait, back camera facing forward** — the
-  vision, compass (direction the camera faces) and turn-rate readings are
-  designed for that. A phone lying flat also works for compass and tilt.
-  The app stays in portrait.
-- **Upside down is fine** (charging port up, e.g. when a holder covers the
-  bottom), also leaning back against a support. With *Phone mounting:
-  Automatic* (the default) the app notices within about a second and
-  flips the camera image, so "target on the left" still means the robot's
-  left and steering is unchanged; the program log says when it switches. Choose *Upright* or *Upside
-  down* in the camera settings to fix it instead.
+- Mount the phone with the **back camera facing forward** — the vision,
+  compass (direction the camera faces) and turn-rate readings are designed
+  for that. A phone lying flat also works for compass and tilt.
+- **Upright, upside down or on its side all work** (e.g. charging port up
+  when a holder covers the bottom, or sideways for a wider view), also
+  leaning back against a support. With *Phone mounting: Automatic* (the
+  default) the app notices within about a second and turns the camera
+  image, so "target on the left" still means the robot's left and
+  steering is unchanged; the program log says when it switches. Choose a
+  fixed mount in the camera settings instead if you prefer. Tilt (pitch
+  and roll) is measured for a portrait phone.
+- The app stays in portrait, except the **Camera page**, which turns
+  sideways with the phone when the phone's auto-rotate is on (with
+  auto-rotate off, tap the rotate button Android shows).
+- **Watch the camera while a program runs:** switch to the Home tab and
+  open Configure Sensors › Camera — the program keeps running and the box
+  it follows is drawn in green. Tapping another box there makes the
+  program follow that one (Lock Object Type only switches back if it has
+  a different label).
 - Object detection uses **EfficientDet-Lite0** (80 everyday COCO objects,
   e.g. person, cup, bottle, sports ball — no faces). Accuracy, speed and
   limitations: [docs/MODELS.md](docs/MODELS.md).
