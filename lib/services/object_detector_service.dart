@@ -10,8 +10,12 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 
 import 'vision_preferences.dart';
 
+/// The part of the model input that holds the upright picture: its top-left
+/// [width]×[height] input pixels. The rest is grey padding.
+typedef PictureArea = ({int width, int height});
+
 class DetectionResult {
-  /// Normalized box in *screen* coordinates (portrait camera preview), for
+  /// Normalized box in *screen* coordinates (the camera preview as shown), for
   /// drawing and tap-to-lock.
   final Rect boundingBox;
   /// Normalized box in the *upright* picture the model saw — the robot's own
@@ -332,8 +336,9 @@ class ObjectDetectorService {
 
         try {
           final frameWatch = Stopwatch()..start();
+          final area = _areaFor(message, inputW, inputH);
           // ── Fast path: single-pass fused convert + resize + rotate ──────────
-          Uint8List? input = _directToTensor(message, inputW, inputH, inputType);
+          Uint8List? input = _directToTensor(message, inputW, inputH, inputType, area);
 
           if (input == null) {
             // Slow fallback via img package (unusual pixel formats).
@@ -343,8 +348,7 @@ class ObjectDetectorService {
               mainSendPort.send(<DetectionResult>[]);
               continue;
             }
-            final resized = img.copyResize(image, width: inputW, height: inputH);
-            input = _imageToTensor(resized, inputW, inputH, inputType);
+            input = _imageToTensor(image, inputW, inputH, inputType, area);
           }
 
           final boxesOut = List<List<List<double>>>.generate(
@@ -390,16 +394,11 @@ class ObjectDetectorService {
             if (score < message.threshold) continue;
 
             final classIndex = classes[i].toInt();
-            final rawBox = locations[i];
-            // TFLite SSD output: [ymin, xmin, ymax, xmax] in rotated-tensor space.
-            final double yt = rawBox[0].clamp(0.0, 1.0);
-            final double xt = rawBox[1].clamp(0.0, 1.0);
-            final double yb = rawBox[2].clamp(0.0, 1.0);
-            final double xr = rawBox[3].clamp(0.0, 1.0);
-
-            // The tensor was rotated upright, so its box is already in the
-            // robot's frame; the screen preview may be turned from it.
-            final uprightBox = Rect.fromLTRB(xt, yt, xr, yb);
+            // The tensor was rotated upright, so once the padding is taken
+            // off the box is in the robot's frame; the screen preview may be
+            // turned from it.
+            final uprightBox = modelBoxToUpright(locations[i], area, inputW, inputH);
+            if (uprightBox == null) continue;
             final displayBox = uprightToDisplay(uprightBox, message.displayNet);
             if (displayBox.width <= 0 || displayBox.height <= 0) continue;
 
@@ -467,10 +466,85 @@ class ObjectDetectorService {
     return aInt;
   }
 
+  // ── Model input geometry ─────────────────────────────────────────────────────
+
+  /// Grey written where the model input holds no picture. EfficientDet-Lite
+  /// normalizes pixels as (x − 127) / 128, so 127 reads as 0 — what its own
+  /// training padding looks like.
+  static const int padValue = 127;
+
+  /// Where an upright picture of [w]×[h] goes in the [targetW]×[targetH]
+  /// model input: always at the top-left corner, as in the model's training
+  /// pipeline. A picture taller than the input (phone upright) is stretched
+  /// to fill it, as before; a wider one (phone on its side) keeps its
+  /// proportions at full width with grey padding below. Stretching that one
+  /// taller made people thinner than the model knows them: −2.7 person AP
+  /// on COCO (docs/MODELS.md). Public for tests.
+  static PictureArea pictureArea(int w, int h, int targetW, int targetH) {
+    if (w * targetH > h * targetW) {
+      return (width: targetW, height: (h * targetW / w).round().clamp(1, targetH));
+    }
+    return (width: targetW, height: targetH);
+  }
+
+  /// Maps a model box ([ymin, xmin, ymax, xmax], normalized to the model
+  /// input) to the upright picture in [area], normalized 0..1 and clamped.
+  /// Null when nothing of it lies on the picture. Public for tests.
+  static Rect? modelBoxToUpright(List<double> box, PictureArea area, int targetW, int targetH) {
+    final sx = targetW / area.width, sy = targetH / area.height;
+    final r = Rect.fromLTRB(
+      (box[1] * sx).clamp(0.0, 1.0),
+      (box[0] * sy).clamp(0.0, 1.0),
+      (box[3] * sx).clamp(0.0, 1.0),
+      (box[2] * sy).clamp(0.0, 1.0),
+    );
+    return r.width > 0 && r.height > 0 ? r : null;
+  }
+
+  static PictureArea _areaFor(_FrameCmd cmd, int targetW, int targetH) {
+    final swap = cmd.rotation == 90 || cmd.rotation == 270;
+    return pictureArea(swap ? cmd.height : cmd.width, swap ? cmd.width : cmd.height,
+        targetW, targetH);
+  }
+
+  /// The uint8 or float32 model input a camera frame becomes, for tests:
+  /// [planes] are (bytes, bytesPerRow, bytesPerPixel) as the camera hands
+  /// them over (3 planes YUV420, or 1 plane BGRA8888).
+  @visibleForTesting
+  static Uint8List? debugFrameToTensor(
+      List<(Uint8List, int, int?)> planes, int width, int height, int rotation,
+      int targetW, int targetH, {TensorType type = TensorType.uint8}) {
+    final cmd = _FrameCmd(
+      planes: [
+        for (final (bytes, bytesPerRow, bytesPerPixel) in planes)
+          _PlaneData(
+            data: TransferableTypedData.fromList([bytes]),
+            bytesPerRow: bytesPerRow,
+            bytesPerPixel: bytesPerPixel,
+            height: height,
+            width: width,
+          ),
+      ],
+      height: height,
+      width: width,
+      format: 0,
+      rotation: rotation,
+    );
+    return _directToTensor(cmd, targetW, targetH, type, _areaFor(cmd, targetW, targetH));
+  }
+
+  /// The slow path's model input for an already upright [image], for tests.
+  @visibleForTesting
+  static Uint8List debugImageToTensor(img.Image image, int targetW, int targetH,
+          {TensorType type = TensorType.uint8}) =>
+      _imageToTensor(image, targetW, targetH, type,
+          pictureArea(image.width, image.height, targetW, targetH));
+
   // ── Fast single-pass tensor fill ─────────────────────────────────────────────
 
-  /// Fuses YUV→RGB conversion, nearest-neighbour resize, and optional 90° CW
-  /// rotation into a single loop — no intermediate full-resolution image.
+  /// Fuses YUV→RGB conversion, rotation upright and nearest-neighbour resize
+  /// into [area] (see [pictureArea]) in a single loop — no intermediate
+  /// full-resolution image. The rest of the input is [padValue] grey.
   ///
   /// Supports 3-plane YUV420 (Android) and single-plane BGRA8888 (iOS).
   /// Returns null for any other format so the caller can fall back to the slow path.
@@ -479,46 +553,46 @@ class ObjectDetectorService {
   /// nested [1][h][w][3] list: tflite_flutter copies a Uint8List into the
   /// tensor in one go but converts nested lists element by element, which
   /// took ~0.4 s per frame for this 320×320×3 input.
-  static Uint8List? _directToTensor(_FrameCmd cmd, int targetW, int targetH, TensorType tensorType) {
+  static Uint8List? _directToTensor(_FrameCmd cmd, int targetW, int targetH,
+      TensorType tensorType, PictureArea area) {
     final srcW = cmd.width;
     final srcH = cmd.height;
     final rotate90CW  = cmd.rotation == 90;
     final rotate270CW = cmd.rotation == 270;
     final flip180     = cmd.rotation == 180;
-    final pixelCount = targetW * targetH;
+    final areaW = area.width, areaH = area.height;
     final isFloat = tensorType != TensorType.uint8;
 
-    // Precompute the source column/row for every target column/row. With a
+    // Precompute the source column/row for every picture column/row. With a
     // 90°/270° rotation the target x maps to a source row and vice-versa.
-    final Int32List mapA = Int32List(targetW); // indexed by tx
-    final Int32List mapB = Int32List(targetH); // indexed by ty
-    for (int tx = 0; tx < targetW; tx++) {
+    final Int32List mapA = Int32List(areaW); // indexed by tx
+    final Int32List mapB = Int32List(areaH); // indexed by ty
+    for (int tx = 0; tx < areaW; tx++) {
       if (rotate90CW) {
-        mapA[tx] = (srcH - 1 - ((tx * srcH) ~/ targetW)).clamp(0, srcH - 1); // sy
+        mapA[tx] = (srcH - 1 - ((tx * srcH) ~/ areaW)).clamp(0, srcH - 1); // sy
       } else if (rotate270CW) {
-        mapA[tx] = ((tx * srcH) ~/ targetW).clamp(0, srcH - 1); // sy
+        mapA[tx] = ((tx * srcH) ~/ areaW).clamp(0, srcH - 1); // sy
       } else if (flip180) {
-        mapA[tx] = (srcW - 1 - ((tx * srcW) ~/ targetW)).clamp(0, srcW - 1); // sx
+        mapA[tx] = (srcW - 1 - ((tx * srcW) ~/ areaW)).clamp(0, srcW - 1); // sx
       } else {
-        mapA[tx] = ((tx * srcW) ~/ targetW).clamp(0, srcW - 1); // sx
+        mapA[tx] = ((tx * srcW) ~/ areaW).clamp(0, srcW - 1); // sx
       }
     }
-    for (int ty = 0; ty < targetH; ty++) {
+    for (int ty = 0; ty < areaH; ty++) {
       if (rotate90CW) {
-        mapB[ty] = ((ty * srcW) ~/ targetH).clamp(0, srcW - 1); // sx
+        mapB[ty] = ((ty * srcW) ~/ areaH).clamp(0, srcW - 1); // sx
       } else if (rotate270CW) {
-        mapB[ty] = (srcW - 1 - ((ty * srcW) ~/ targetH)).clamp(0, srcW - 1); // sx
+        mapB[ty] = (srcW - 1 - ((ty * srcW) ~/ areaH)).clamp(0, srcW - 1); // sx
       } else if (flip180) {
-        mapB[ty] = (srcH - 1 - ((ty * srcH) ~/ targetH)).clamp(0, srcH - 1); // sy
+        mapB[ty] = (srcH - 1 - ((ty * srcH) ~/ areaH)).clamp(0, srcH - 1); // sy
       } else {
-        mapB[ty] = ((ty * srcH) ~/ targetH).clamp(0, srcH - 1); // sy
+        mapB[ty] = ((ty * srcH) ~/ areaH).clamp(0, srcH - 1); // sy
       }
     }
     final bool swapAxes = rotate90CW || rotate270CW;
 
-    final Uint8List? u8 = isFloat ? null : Uint8List(pixelCount * 3);
-    final Float32List? f32 = isFloat ? Float32List(pixelCount * 3) : null;
-    int out = 0;
+    final (u8, f32) = _paddedInput(targetW, targetH, isFloat, area);
+    final rowStep = targetW * 3; // a picture row may be narrower than the input
 
     // ── 3-plane YUV420 ───────────────────────────────────────────────────────
     if (cmd.planes.length == 3) {
@@ -530,9 +604,10 @@ class ObjectDetectorService {
       final uvPx  = cmd.planes[1].bytesPerPixel ?? 1;
       final yLen = yBytes.length, uLen = uBytes.length, vLen = vBytes.length;
 
-      for (int ty = 0; ty < targetH; ty++) {
+      for (int ty = 0; ty < areaH; ty++) {
         final b = mapB[ty];
-        for (int tx = 0; tx < targetW; tx++) {
+        int out = ty * rowStep;
+        for (int tx = 0; tx < areaW; tx++) {
           final a = mapA[tx];
           final int sx = swapAxes ? b : a;
           final int sy = swapAxes ? a : b;
@@ -567,9 +642,10 @@ class ObjectDetectorService {
       final rowStride = cmd.planes[0].bytesPerRow;
       final len = bytes.length;
 
-      for (int ty = 0; ty < targetH; ty++) {
+      for (int ty = 0; ty < areaH; ty++) {
         final b = mapB[ty];
-        for (int tx = 0; tx < targetW; tx++) {
+        int out = ty * rowStep;
+        for (int tx = 0; tx < areaW; tx++) {
           final a = mapA[tx];
           final int sx = swapAxes ? b : a;
           final int sy = swapAxes ? a : b;
@@ -748,32 +824,46 @@ class ObjectDetectorService {
     }
   }
 
-  static Uint8List _imageToTensor(img.Image resized, int w, int h, TensorType tensorType) {
-    if (tensorType == TensorType.uint8) {
-      final buf = Uint8List(w * h * 3);
-      int out = 0;
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          final p = resized.getPixel(x, y);
-          buf[out++] = p.r.toInt();
-          buf[out++] = p.g.toInt();
-          buf[out++] = p.b.toInt();
+  /// Same input as [_directToTensor], from an upright image: resized
+  /// (nearest neighbour) into [area], grey padding elsewhere.
+  static Uint8List _imageToTensor(
+      img.Image upright, int w, int h, TensorType tensorType, PictureArea area) {
+    final resized = upright.width == area.width && upright.height == area.height
+        ? upright
+        : img.copyResize(upright, width: area.width, height: area.height);
+    final (u8, f32) = _paddedInput(w, h, tensorType != TensorType.uint8, area);
+    for (int y = 0; y < area.height; y++) {
+      int out = y * w * 3;
+      for (int x = 0; x < area.width; x++) {
+        final p = resized.getPixel(x, y);
+        if (u8 != null) {
+          u8[out++] = p.r.toInt();
+          u8[out++] = p.g.toInt();
+          u8[out++] = p.b.toInt();
+        } else {
+          f32![out++] = (p.r.toInt() - 127.5) / 127.5;
+          f32[out++] = (p.g.toInt() - 127.5) / 127.5;
+          f32[out++] = (p.b.toInt() - 127.5) / 127.5;
         }
       }
-      return buf;
-    } else {
-      final buf = Float32List(w * h * 3);
-      int out = 0;
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          final p = resized.getPixel(x, y);
-          buf[out++] = (p.r.toInt() - 127.5) / 127.5;
-          buf[out++] = (p.g.toInt() - 127.5) / 127.5;
-          buf[out++] = (p.b.toInt() - 127.5) / 127.5;
-        }
-      }
-      return buf.buffer.asUint8List();
     }
+    return u8 ?? f32!.buffer.asUint8List();
+  }
+
+  /// A [w]×[h]×3 input buffer (uint8, or float32 normalized like the
+  /// pixels), pre-filled with [padValue] when [area] leaves part of it empty.
+  static (Uint8List?, Float32List?) _paddedInput(
+      int w, int h, bool isFloat, PictureArea area) {
+    final n = w * h * 3;
+    final padded = area.width < w || area.height < h;
+    if (isFloat) {
+      final f32 = Float32List(n);
+      if (padded) f32.fillRange(0, n, (padValue - 127.5) / 127.5);
+      return (null, f32);
+    }
+    final u8 = Uint8List(n);
+    if (padded) u8.fillRange(0, n, padValue);
+    return (u8, null);
   }
 }
 
