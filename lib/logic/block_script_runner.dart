@@ -9,6 +9,7 @@ import '../services/actuator_service.dart';
 import '../utils/execution_logger.dart';
 import 'actuator_driver.dart';
 import 'python_script_runner.dart';
+import 'servo_tracking.dart';
 import 'smart_follow.dart';
 
 enum ExecutionState { idle, running, paused }
@@ -152,6 +153,8 @@ class BlockScriptRunner {
     _state = ExecutionState.running;
     _stateController.add(_state);
     _driver.reset();
+    _trackAngles.clear();
+    _trackFrames.clear();
 
     await _startSensorListening(run);
     await _executeScript(run);
@@ -508,9 +511,7 @@ class BlockScriptRunner {
 
       case ActuatorType.servo:
         if (blockId.startsWith('act_servo_track_x_')) {
-          final multi = ScriptUtils.toDouble(block.inputValues['multiplier'], 90.0);
-          final offset = _visionService.targetOffsetX; // -1 .. +1
-          await _driver.servoAngle(actuator, ((offset * -multi) + 90).round());
+          await _trackX(block, actuator);
         } else if (actuator.isContinuous) {
           final direction = (block.inputValues['direction'] ?? 'STOP').toString();
           final pct = ScriptUtils.toInt(block.inputValues['speed'], 75);
@@ -530,6 +531,33 @@ class BlockScriptRunner {
         await _driver.setDigital(actuator, stateStr == 'ON');
         break;
     }
+  }
+
+  /// Track X: the angle each servo is at, and the camera picture it last
+  /// reacted to (reset at every RUN).
+  final Map<String, double> _trackAngles = {};
+  final Map<String, int> _trackFrames = {};
+
+  /// Points the servo at the locked target (ServoTracking). Acts once per
+  /// new camera picture — so the speed doesn't depend on how fast the
+  /// program loops or how fast the phone is — and holds still without a
+  /// target instead of snapping back to the centre.
+  Future<void> _trackX(BlockInstance block, ActuatorConfig servo) async {
+    final frame = _visionService.frameCount;
+    if (!_visionService.isLocked || _trackFrames[servo.id] == frame) return;
+    _trackFrames[servo.id] = frame;
+
+    final mode = (block.inputValues['mode'] ?? ServoTracking.onServo).toString();
+    final strength = ScriptUtils.toInt(block.inputValues['strength'], 50).clamp(1, 100);
+    final reversed = (block.inputValues['direction'] ?? 'NORMAL').toString() == 'REVERSED';
+    final minA = servo.minAngle.clamp(0, 180).toDouble();
+    final maxA = servo.maxAngle.clamp(servo.minAngle.clamp(0, 180), 180).toDouble();
+    final current = _trackAngles[servo.id] ?? 90.0.clamp(minA, maxA);
+    final next = ServoTracking.next(mode, current, _visionService.targetOffsetX, strength,
+            reversed: reversed)
+        .clamp(minA, maxA);
+    _trackAngles[servo.id] = next;
+    await _driver.servoAngle(servo, next.round());
   }
 
   // ── Smart Follow: chase the target in small steps ──────────────────────────

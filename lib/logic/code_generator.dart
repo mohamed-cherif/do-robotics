@@ -1,4 +1,5 @@
 import '../models/block_models.dart';
+import 'servo_tracking.dart';
 import 'smart_follow.dart';
 
 /// Converts a block program into runnable RoboPython (the same API the
@@ -169,10 +170,7 @@ class _Gen {
     final v = _actuatorVar(block);
     final inputs = block.definition.inputs;
 
-    if (id.startsWith('act_servo_track_x_')) {
-      final multi = _numLit(block.inputValues['multiplier'], 90);
-      return '$ind$v.angle(int(90 - robot.vision.offset_x * $multi))\n';
-    }
+    if (id.startsWith('act_servo_track_x_')) return _trackX(block, v, ind);
     if (inputs.any((i) => i.id == 'direction')) {
       final dir = (block.inputValues['direction'] ?? 'FORWARD').toString().toUpperCase();
       final isServo = id.startsWith('act_servo_');
@@ -190,6 +188,39 @@ class _Gen {
       return '$ind$v.angle($angle)\n';
     }
     return '$ind# ${block.definition.label}\n';
+  }
+
+  // Same behaviour as the block runner (ServoTracking): once per new camera
+  // picture while a target is locked; holds still otherwise.
+  String _trackX(BlockInstance block, String v, String ind) {
+    final mode = (block.inputValues['mode'] ?? ServoTracking.onServo).toString();
+    final strength = (num.tryParse('${block.inputValues['strength'] ?? 50}') ?? 50).clamp(1, 100);
+    final sign = (block.inputValues['direction'] ?? 'NORMAL').toString() == 'REVERSED' ? '+' : '-';
+    String n(num x) => x == x.roundToDouble() ? x.round().toString() : x.toStringAsFixed(2);
+    final angle = '${v}_angle';
+    final frame = '${v}_frame';
+    final decl = '$angle, $frame = 90, -1  # where $v points; last camera picture it used';
+    if (!_declarations.contains(decl)) _declarations.add(decl);
+    final i1 = '$ind    ';
+    final out = StringBuffer()
+      ..writeln('$ind# Track X ($mode): once per new camera picture, while a target is locked')
+      ..writeln('${ind}if robot.vision.locked and robot.vision.frame != $frame:')
+      ..writeln('$i1$frame = robot.vision.frame')
+      ..writeln('${i1}x = robot.vision.offset_x   # -1 (left) .. 1 (right)');
+    if (mode == ServoTracking.fixed) {
+      final edge = n(ServoTracking.edgePerStrength * strength);
+      out.writeln('$i1# phone fixed: aim at the matching angle, half way per picture');
+      out.writeln('$i1$angle += (90 $sign x * $edge - $angle) * ${n(ServoTracking.smoothing)}');
+    } else {
+      final step = n(ServoTracking.stepPerStrength * strength);
+      out.writeln('$i1# phone on the servo: nudge toward the target until it is centred');
+      out.writeln('${i1}if abs(x) > ${n(ServoTracking.deadband)}:');
+      out.writeln('$i1    $angle = $angle $sign x * $step');
+    }
+    out
+      ..writeln('$i1$angle = max(0, min(180, $angle))')
+      ..writeln('$i1$v.angle(int(round($angle)))');
+    return out.toString();
   }
 
   // Same behaviour as the block runner (SmartFollowControl): chase the target

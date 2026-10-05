@@ -176,7 +176,10 @@ connected).
   True/False, And/Or/Not, Print, Say, Stop Program, Expression.
 - **Math:** Number, Random, + − × ÷, Less Than, Greater Than, Equals.
 - **Devices:** one block per configured device (LED, motor, positional or
-  continuous servo, buzzer, switch), *Track X* for servos, and **Smart
+  continuous servo, buzzer, switch), **Track X** to point a servo at the
+  locked target (*phone on servo*: the camera turns with it and is nudged
+  until the target is centred; *phone fixed*: the servo aims from the
+  picture), and **Smart
   Follow** (a ready-made follow/fetch controller for two-motor robots).
 
 ### Python
@@ -214,7 +217,7 @@ while True:
 | `robot.motor(name)` | `.forward(speed)`, `.backward(speed)`, `.stop()`, `.speed(±v)` |
 | `robot.servo(name)` | `.angle(deg)` or, for continuous servos, `.forward(pct)`, `.backward(pct)`, `.stop()` |
 | `robot.led/buzzer/switch(name)` | `.on()`, `.off()`, `.toggle()`, `.is_on` |
-| `robot.vision` | `.detected`, `.lock(label)`, `.locked`, `.label`, `.offset_x/.offset_y`, `.size`, `.objects`, `.line_visible`, `.line_offset`, `.unlock()` |
+| `robot.vision` | `.detected`, `.lock(label)`, `.locked`, `.label`, `.offset_x/.offset_y`, `.size`, `.objects`, `.frame` (changes with each new picture), `.line_visible`, `.line_offset`, `.unlock()` |
 | `robot.imu` | `.pitch`, `.roll`, `.yaw_rate`, `.shaking`, `.tilted`, `.spinning` |
 | `robot.compass` | `.heading`, `.facing("North" \| degrees)` |
 | `robot.mic` | `.loud`, `.heard(phrase)`, `.words` |

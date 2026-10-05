@@ -21,6 +21,8 @@ abstract class RobotApi {
   bool get visionDetected;
   bool visionLock(String label);
   bool get visionLocked;
+  /// Count of processed camera pictures (changes with every new picture).
+  int get visionFrame;
   String get visionLabel;
   double get offsetX;
   double get offsetY;
@@ -104,6 +106,8 @@ class LiveRobotApi implements RobotApi {
 
   @override
   bool get visionLocked => _vision.isLocked;
+  @override
+  int get visionFrame => _vision.frameCount;
   @override
   String get visionLabel => _vision.isLocked ? _vision.targetLabel : '';
   @override

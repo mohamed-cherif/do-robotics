@@ -1,5 +1,6 @@
 import '../models/block_models.dart';
 import '../models/actuator_config.dart';
+import '../logic/servo_tracking.dart';
 
 class BlockFactory {
   // Vision sensor block
@@ -826,6 +827,9 @@ class BlockFactory {
     );
   }
 
+  // Track X — points a positional servo at the locked target (see
+  // ServoTracking): nudged step by step when the phone sits on the servo,
+  // mapped from the picture when the phone is fixed.
   static BlockDefinition _servoTrackXBlock(ActuatorConfig actuator) {
     return BlockDefinition(
       id: 'act_servo_track_x_${actuator.id}',
@@ -836,12 +840,26 @@ class BlockFactory {
       category: 'Actuators',
       inputs: [
         InputFieldDefinition(
-          id: 'multiplier',
-          label: 'speed multi',
+          id: 'mode',
+          label: '',
+          type: InputFieldType.dropdown,
+          options: ServoTracking.modes,
+          defaultValue: ServoTracking.onServo,
+        ),
+        InputFieldDefinition(
+          id: 'strength',
+          label: 'strength',
           type: InputFieldType.number,
-          defaultValue: 90,
+          defaultValue: 50,
           min: 1,
-          max: 180,
+          max: 100,
+        ),
+        InputFieldDefinition(
+          id: 'direction',
+          label: '',
+          type: InputFieldType.dropdown,
+          options: ['NORMAL', 'REVERSED'],
+          defaultValue: 'NORMAL',
         ),
       ],
     );

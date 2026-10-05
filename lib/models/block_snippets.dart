@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
+import '../logic/servo_tracking.dart';
 import 'block_models.dart';
 
 /// A ready-made block program (Blocks › ⚡ Snippets). The Python tab's
@@ -11,6 +12,7 @@ class BlockSnippet {
     required this.name,
     required this.description,
     required this.requiredMotors,
+    this.requiredServos = 0,
     required this.build,
   });
 
@@ -19,15 +21,20 @@ class BlockSnippet {
   final String description;
   final int requiredMotors;
 
+  /// Positional servos needed (for Track X).
+  final int requiredServos;
+
   /// Builds fresh block instances (new ids every call).
   final List<BlockInstance> Function() build;
 }
 
 /// The snippets. [defs]: every block definition available; [motors]: the
 /// motor block definitions in configuration order. A snippet can only be
-/// built when there are at least [BlockSnippet.requiredMotors] motors.
+/// built when there are at least [BlockSnippet.requiredMotors] motors and
+/// [BlockSnippet.requiredServos] positional servos (Track X blocks in [defs]).
 List<BlockSnippet> blockSnippets(List<BlockDefinition> defs, List<BlockDefinition> motors) {
   const uuid = Uuid();
+  final trackers = defs.where((d) => d.id.startsWith('act_servo_track_x_')).toList();
 
   // Helper to create a motor block instance
   BlockInstance motorBlock(BlockDefinition def, String direction, int speed) {
@@ -731,6 +738,47 @@ List<BlockSnippet> blockSnippets(List<BlockDefinition> defs, List<BlockDefinitio
     },
   ];
 
+  // Servo Tracker: Forever › If Lock Object Type [person] › Track X.
+  snippets.add({
+    'emoji': '\u{1F440}', // 👀
+    'name': 'Servo Tracker',
+    'description': 'A servo keeps pointing at a person. On the Track X block choose '
+        'PHONE ON SERVO when the phone turns with the servo, PHONE FIXED when it '
+        'stays still; REVERSED if the servo turns away from the person.',
+    'requiredMotors': 0,
+    'requiredServos': 1,
+    'build': () {
+      final track = BlockInstance(
+        instanceId: uuid.v4(),
+        definition: trackers.first,
+        inputValues: {'mode': ServoTracking.onServo, 'strength': 50, 'direction': 'NORMAL'},
+      );
+      final ifLocked = BlockInstance(
+        instanceId: uuid.v4(),
+        definition: findDef('logic_if'),
+        nestedBlocks: {
+          'condition': BlockInstance(
+            instanceId: uuid.v4(),
+            definition: findDef('sense_object_locked'),
+            inputValues: {'target': 'person'},
+          ),
+          'then': track,
+        },
+      )..nextBlock = BlockInstance(
+          instanceId: uuid.v4(),
+          definition: findDef('logic_wait'),
+          inputValues: {'seconds': 0.02},
+        );
+      final forever = BlockInstance(
+        instanceId: uuid.v4(),
+        definition: findDef('logic_forever'),
+        nestedBlocks: {'do': ifLocked},
+      );
+      forever.position = const Offset(100, 100);
+      return [forever];
+    },
+  });
+
   return [
     for (final s in snippets)
       BlockSnippet(
@@ -738,6 +786,7 @@ List<BlockSnippet> blockSnippets(List<BlockDefinition> defs, List<BlockDefinitio
         name: s['name'] as String,
         description: s['description'] as String,
         requiredMotors: s['requiredMotors'] as int,
+        requiredServos: (s['requiredServos'] as int?) ?? 0,
         build: s['build'] as List<BlockInstance> Function(),
       ),
   ];

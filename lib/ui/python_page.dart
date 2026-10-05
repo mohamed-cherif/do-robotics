@@ -177,9 +177,9 @@ print("Done")
   ];
 }
 
-/// Block snippets built with the configured motors, or with placeholder
-/// "Left Wheel" / "Right Wheel" motors when fewer than two are set up (the
-/// example then shows which names to configure).
+/// Block snippets built with the configured motors and servo, or with
+/// placeholder "Left Wheel" / "Right Wheel" motors and a "Pan Servo" when
+/// they aren't set up (the example then shows which names to configure).
 List<BlockSnippet> _snippetsForPython(List<ActuatorConfig> actuators) {
   var motors = actuators.where((a) => a.type == ActuatorType.motor).toList();
   if (motors.length < 2) {
@@ -188,8 +188,19 @@ List<BlockSnippet> _snippetsForPython(List<ActuatorConfig> actuators) {
       ActuatorConfig(id: 'example_right', name: 'Right Wheel', type: ActuatorType.motor, pin: 0),
     ];
   }
+  var servos = actuators.where((a) => a.type == ActuatorType.servo && !a.isContinuous).toList();
+  if (servos.isEmpty) {
+    servos = [
+      ActuatorConfig(id: 'example_pan', name: 'Pan Servo', type: ActuatorType.servo, pin: 0,
+          parameters: {'minAngle': 0, 'maxAngle': 180}),
+    ];
+  }
   final motorDefs = [for (final m in motors) BlockFactory.actuatorBlock(m)];
-  final defs = [...BlockFactory.getAllStaticBlocks(), ...motorDefs];
+  final defs = [
+    ...BlockFactory.getAllStaticBlocks(),
+    ...motorDefs,
+    for (final s in servos) BlockFactory.actuatorTrackingBlock(s),
+  ];
   return blockSnippets(defs, motorDefs);
 }
 
@@ -220,6 +231,7 @@ const Map<String, IconData> _snippetIcons = {
   'Line Follower': Icons.timeline,
   'Tilt Steering': Icons.screen_rotation_outlined,
   'Compass Patrol': Icons.explore_outlined,
+  'Servo Tracker': Icons.track_changes,
 };
 
 const String _kApiReference = '''
@@ -242,6 +254,7 @@ led.on(); led.off(); led.toggle()                    # led / buzzer / switch
 robot.vision.detected        # bool - any object in the current frame
 robot.vision.lock("person")  # bool - lock on the most confident "person"
 robot.vision.locked          # bool
+robot.vision.frame           # int - changes with every new camera picture
 robot.vision.label           # str  - label of the locked object
 robot.vision.offset_x        # -1..1 (left..right)
 robot.vision.offset_y        # -1..1 (top..bottom)

@@ -137,6 +137,7 @@ PyObject buildRobotModule(RobotApi api, Interpreter interp, {void Function(Strin
     return api.visionLock(argStr(a, 0, 'lock'));
   });
   vision.getter('locked', () => api.visionLocked);
+  vision.getter('frame', () => api.visionFrame);
   vision.getter('label', () => api.visionLabel);
   vision.getter('offset_x', () => api.offsetX);
   vision.getter('offset_y', () => api.offsetY);

@@ -84,6 +84,13 @@ permissions), one Android 13–15 phone, one budget device with 3–4 GB RAM.
       it. With no bottle in view it stays still. If a wheel hums without
       turning, raise "min speed"; if it turns away from the bottle, set the
       block's steering to REVERSED.
+- [ ] ⚡ Snippets › Servo Tracker (a positional servo, person in view):
+      - phone on the servo: the servo turns until the person is centred,
+        then holds still; walk sideways and it follows without swinging past;
+      - phone fixed next to the servo (set Track X to PHONE FIXED): the servo
+        points at the person; adjust strength until it lines up;
+      - person leaves: the servo stays where it is (no jump back to 90°);
+      - servo turns away from the person: REVERSED fixes it.
 - [ ] Same with the setting on *Upside down* (no waiting) and on *Upright*
       (an upside-down phone now sees an upside-down picture: detection
       gets worse — expected, the setting overrides the sensor).

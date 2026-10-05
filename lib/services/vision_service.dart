@@ -326,9 +326,15 @@ class VisionService {
   @visibleForTesting
   void debugOnDetections(List<DetectionResult> results) => _onDetections(results);
 
+  /// Number of camera pictures processed so far (a new picture = a new
+  /// number), so code can react once per picture.
+  int get frameCount => _frameCount;
+  int _frameCount = 0;
+
   void _onDetections(List<DetectionResult> results) {
     final now = clock();
     _lastResultAt = now;
+    _frameCount++;
     // The detector also reports weaker detections (down to
     // ObjectDetectorService.trackingFloor); only the confident ones count as
     // seen, are drawn and can start a lock.

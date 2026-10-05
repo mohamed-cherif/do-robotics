@@ -115,7 +115,9 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
       _actuatorBlocks = _actuatorService.actuators
           .expand((actuator) => [
                 BlockFactory.actuatorBlock(actuator),
-                if (actuator.type == ActuatorType.servo)
+                // Track X points a positional servo; it would make a
+                // continuous-rotation servo spin.
+                if (actuator.type == ActuatorType.servo && !actuator.isContinuous)
                   BlockFactory.actuatorTrackingBlock(actuator)
               ])
           .toList();
@@ -426,7 +428,10 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
                       itemBuilder: (_, i) {
                         final s = snippets[i];
                         final required = s.requiredMotors;
-                        final hasEnough = motorCount >= required;
+                        final servoCount =
+                            defs.where((d) => d.id.startsWith('act_servo_track_x_')).length;
+                        final needsServo = servoCount < s.requiredServos;
+                        final hasEnough = motorCount >= required && !needsServo;
 
                         return Container(
                           padding: const EdgeInsets.all(16),
@@ -491,7 +496,9 @@ class LogicPageState extends State<LogicPage> with SingleTickerProviderStateMixi
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(
-                                    '\u{26A0} Needs $required motors',
+                                    needsServo
+                                        ? '\u{26A0} Needs a servo (not continuous)'
+                                        : '\u{26A0} Needs $required motors',
                                     style: const TextStyle(
                                       fontSize: 12,
                                       color: Color(0xFF92400E),

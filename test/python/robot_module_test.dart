@@ -50,6 +50,9 @@ class FakeRobotApi implements RobotApi {
 
   @override
   bool get visionLocked => detected;
+  int frame = 0;
+  @override
+  int get visionFrame => frame++; // every read is a new picture
   @override
   String get visionLabel => detected ? 'person' : '';
   @override

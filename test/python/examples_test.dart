@@ -22,7 +22,14 @@ void main() {
         BlockFactory.actuatorBlock(ActuatorConfig(
             id: name.toLowerCase().replaceAll(' ', '_'), name: name, type: ActuatorType.motor, pin: 0)),
     ];
-    final defs = [...BlockFactory.getAllStaticBlocks(), ...motors];
+    final servo = ActuatorConfig(
+        id: 'pan', name: 'Pan Servo', type: ActuatorType.servo, pin: 0, parameters: {'minAngle': 0, 'maxAngle': 180});
+    final defs = [
+      ...BlockFactory.getAllStaticBlocks(),
+      ...motors,
+      BlockFactory.actuatorBlock(servo),
+      BlockFactory.actuatorTrackingBlock(servo),
+    ];
     final snippets = blockSnippets(defs, motors);
 
     test('there is one Python example per snippet, with the same code', () {
